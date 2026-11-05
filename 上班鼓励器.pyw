@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.2.2"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.3.0"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -184,6 +184,77 @@ CHEERS = {
         "外面热，空调房里赚钱真香", "天热多喝水", "热天心别躁，工资照样涨",
     ],
 }
+
+
+# ---------- 今日签：每人每天固定一签（玩法参考 nonebot_plugin_fortune 和程序员老黄历，内容自写） ----------
+# (等级, 抽中权重, 打工指数范围, 签文)
+FORTUNE_LEVELS = [
+    ("大吉", 10, (90, 100), [
+        "今日摸鱼不被发现，需求一次过", "老板夸你，工资条也在偷偷变长",
+        "会议取消，咖啡免费，代码一次跑通", "今天说的话都有人听，提的方案都被采纳",
+        "贵人就在隔壁工位，开口就有收获", "所有的坑今天都绕开了",
+        "准时下班，路上全是绿灯", "财运亨通，连报销都秒批",
+    ]),
+    ("中吉", 20, (75, 89), [
+        "稳中有进，手头的活今天能收尾", "小有惊喜，可能有人请你喝奶茶",
+        "沟通顺畅，邮件不用来回改三遍", "灵感在线，难题今天有思路",
+        "领导心情不错，适合汇报进度", "忙而不乱，下班前能清空待办",
+        "同事给力，配合默契", "今天的努力，月底看得见",
+    ]),
+    ("小吉", 25, (60, 74), [
+        "小有收获，别贪多，一件一件来", "运气一般般，但午饭会很好吃",
+        "可能被临时拉去帮忙，顺手积点人情", "慢一点没关系，稳住就好",
+        "今天适合整理桌面和文件夹", "会有一点小麻烦，问一句就解决",
+        "平平淡淡，也是好的一天",
+    ]),
+    ("吉", 25, (50, 64), [
+        "按部就班，不出岔子就是胜利", "不求表现，但求不背锅",
+        "日常的一天，把本职做好就行", "中规中矩，记得多喝水",
+        "适合做重复的活，不容易出错", "别跟人较劲，跟进度较劲",
+        "无风无浪，摸鱼也要适度",
+    ]),
+    ("末吉", 15, (35, 49), [
+        "开局不顺，下午会好起来", "小心临时需求，留点余量",
+        "今天的会可能有点长，带上水杯", "容易手滑，发消息前多看一眼",
+        "运势在攒，明天会更好", "低调做事，少说多听",
+    ]),
+    ("凶", 5, (10, 34), [
+        "今日宜装忙，忌被点名", "问题有点多，深呼吸，一个一个解决",
+        "可能会被甩锅，记得留好聊天记录", "诸事不宜，准时下班就是最好的转运",
+        "今天的坑有点深，多问一句再动手",
+    ]),
+]
+FORTUNE_YI = [
+    "准时下班", "摸鱼十分钟", "点杯奶茶", "整理桌面", "回复积压的邮件", "站起来走走",
+    "主动汇报进度", "喝够八杯水", "早点吃午饭", "学点新东西", "给同事带零食", "清空待办",
+    "关掉工作群提醒", "备份文件", "请教老同事", "先做最难的事", "午休小睡", "夸夸同事",
+    "伸个懒腰", "早点出门", "戴耳机听首歌", "按时吃饭", "出去晒晒太阳", "写周报",
+    "拒绝无效会议", "规划下周", "早睡", "记账", "提前十分钟到", "把话说清楚",
+]
+FORTUNE_JI = [
+    "开会超时", "周五上线", "临时改需求", "加班", "已读不回", "背锅", "熬夜",
+    "在群里抬杠", "喝第三杯咖啡", "边吃边干活", "什么都答应", "拖到最后一分钟",
+    "乱改别人的文件", "当着老板摸鱼", "说“马上好”", "深夜回消息", "久坐不动",
+    "冲动消费", "跟电脑较劲", "忘记保存", "点“回复全部”", "把会开成聊天", "画大饼",
+    "空腹喝咖啡", "大清早开会", "硬撑不请假", "乱删文件", "忽略提醒",
+    "连续干两小时不休息", "下班前接新活",
+]
+
+
+def fortune_for(day):
+    """按“日期 + 这台电脑 + 用户名”算出今天的签：同一个人同一天永远是同一签。"""
+    import getpass
+    import hashlib
+    import uuid
+    try:
+        who = f"{uuid.getnode()}|{getpass.getuser()}"
+    except Exception:
+        who = HOME
+    seed = int.from_bytes(hashlib.sha256(f"{day.isoformat()}|{who}".encode()).digest()[:8], "big")
+    rnd = random.Random(seed)
+    level, _, (lo, hi), lines = rnd.choices(FORTUNE_LEVELS, weights=[x[1] for x in FORTUNE_LEVELS])[0]
+    return {"level": level, "text": rnd.choice(lines), "score": rnd.randint(lo, hi),
+            "yi": rnd.sample(FORTUNE_YI, 2), "ji": rnd.sample(FORTUNE_JI, 2)}
 
 
 # ---------- 配置 ----------
@@ -916,10 +987,11 @@ class Floater:
 
         # 天气：现在 / 下班时（下班后换成今晚）/ 明天
         tk.Frame(self.frame, height=1, bg=p["hairline"]).pack(fill="x", pady=(12, 8))
-        self.wx_rows = []
+        self.wx_rows, wx_frames = [], []
         for _ in range(3):
             fr = tk.Frame(self.frame, **S)
             fr.pack(fill="x", pady=(0, 3))
+            wx_frames.append(fr)
             k = tk.Label(fr, text="", fg=p["text3"], font=(FONT, 9), width=5, anchor="w", **S)
             k.pack(side="left", anchor="s")
             v = tk.Label(fr, text="", fg=p["text"], font=(FONT, 10), **S)
@@ -938,6 +1010,21 @@ class Floater:
             lb.pack(side="left")
             self.sun_icons.append(cv)
             self.sun_labels.append(lb)
+
+        # 今日签：贴在“明天”和日出日落两行的右边
+        fb = tk.Frame(self.frame, **S)
+        fb.place(in_=wx_frames[2], relx=1.0, rely=0.0, anchor="ne")
+        self.fortune_title = tk.Label(fb, text="今日签", fg=p["text3"], font=(FONT, 9),
+                                      cursor="hand2", **S)
+        self.fortune_title.pack(anchor="e")
+        self.fortune_lv = tk.Label(fb, text="", fg=p["accent"], font=(FONT, 11, "bold"),
+                                   cursor="hand2", **S)
+        self.fortune_lv.pack(anchor="e")
+        for w in (fb, self.fortune_title, self.fortune_lv):
+            w.bind("<ButtonRelease-1>", self.on_fortune_click)
+            w.bind("<Double-Button-1>", lambda _e: "break")  # 双击这里不切换迷你模式
+        self.fortune_anim = False
+        self.refresh_fortune()
 
         tk.Frame(self.frame, height=1, bg=p["hairline"]).pack(fill="x", pady=(9, 10))
         self.lbl_cheer = tk.Label(self.frame, text="", fg=p["text2"], font=(FONT, 9),
@@ -1025,6 +1112,7 @@ class Floater:
         self.root.destroy()
 
     def drag_start(self, e):
+        self._press = (e.x_root, e.y_root)
         self._dx = e.x_root - self.root.winfo_x()
         self._dy = e.y_root - self.root.winfo_y()
 
@@ -1132,6 +1220,7 @@ class Floater:
 
         # 天气
         wx_tags = self.refresh_wx(c, st)
+        self.refresh_fortune()
 
         # 鼓励语：状态变了立刻换，否则每 CHEER_EVERY_SEC 秒换一句；
         # 同一组洗牌后轮流出，整组说完才会重复。上班 / 没上班时混进天气相关的句子
@@ -1235,6 +1324,123 @@ class Floater:
             elif wx["now_t"] >= 28:
                 tags.append("hot")
         return tags
+
+    # ---------- 今日签 ----------
+    def fortune_color(self, level):
+        p = self.p
+        return {"大吉": p["gold"], "中吉": p["gold"], "末吉": p["text2"], "凶": p["up"]}.get(
+            level, p["text"])
+
+    def refresh_fortune(self):
+        if self.fortune_anim:
+            return
+        today = dt.date.today()
+        if self.conf.get("fortune_day") == today.isoformat():
+            lv = fortune_for(today)["level"]
+            self.fortune_lv.configure(text=lv, fg=self.fortune_color(lv))
+        else:
+            self.fortune_lv.configure(text="点我抽签", fg=self.p["accent"])
+
+    def on_fortune_click(self, e):
+        px, py = getattr(self, "_press", (e.x_root, e.y_root))
+        if abs(e.x_root - px) > 4 or abs(e.y_root - py) > 4 or self.fortune_anim:
+            return  # 是在拖窗口，或者正在摇签
+        today = dt.date.today()
+        if self.conf.get("fortune_day") == today.isoformat():
+            self.show_fortune_card()
+            return
+        # 摇签动画：等级名快速跳动，越来越慢，最后停在今天的签上
+        self.fortune_anim = True
+        names = [x[0] for x in FORTUNE_LEVELS]
+        delays = [50] * 8 + [80] * 4 + [130, 180, 240]
+
+        def step(i=0):
+            if i < len(delays):
+                self.fortune_lv.configure(text=random.choice(names), fg=self.p["text3"])
+                self.root.after(delays[i], step, i + 1)
+                return
+            self.fortune_anim = False
+            self.conf["fortune_day"] = today.isoformat()
+            save_conf(self.conf)
+            self.refresh_fortune()
+            self.root.after(250, self.show_fortune_card)
+
+        step()
+
+    def show_fortune_card(self):
+        if getattr(self, "fortune_win", None) and self.fortune_win.winfo_exists():
+            self.fortune_win.lift()
+            return
+        p, today = self.p, dt.date.today()
+        f = fortune_for(today)
+        win = tk.Toplevel(self.root, bg=p["ground"])
+        self.fortune_win = win
+        win.title("今日签")
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win_dark_titlebar(win, self.dark)
+        S, G = dict(bg=p["surface"]), dict(bg=p["ground"])
+        color = self.fortune_color(f["level"])
+
+        body = tk.Frame(win, padx=20, pady=14, **G)
+        body.pack(fill="both")
+        tk.Label(body, text=f"{today.month} 月 {today.day} 日 · 周{'一二三四五六日'[today.weekday()]}",
+                 fg=p["text3"], font=(FONT, 9), **G).pack(anchor="w", padx=4, pady=(0, 6))
+
+        card = tk.Frame(body, padx=20, pady=16, highlightthickness=1,
+                        highlightbackground=p["border"], **S)
+        card.pack(fill="x")
+        tk.Label(card, text=f["level"], fg=color, font=(FONT, 30, "bold"), **S).pack()
+        tk.Label(card, text=f["text"], fg=p["text"], font=(FONT, 11), wraplength=int(280 * self.ui_scale()),
+                 justify="center", **S).pack(pady=(2, 12))
+
+        tk.Frame(card, height=1, bg=p["hairline"]).pack(fill="x")
+        sc = tk.Frame(card, pady=10, **S)
+        sc.pack(fill="x")
+        tk.Label(sc, text="打工指数", fg=p["text3"], font=(FONT, 9), **S).pack(side="left")
+        tk.Label(sc, text=str(f["score"]), fg=p["text"], font=(NUM_FONT, 12, "bold"),
+                 **S).pack(side="left", padx=(6, 10))
+        bar = tk.Canvas(sc, width=1, height=6, highlightthickness=0, **S)
+        bar.pack(side="left", fill="x", expand=True)
+
+        def draw_bar(_e=None):
+            w = bar.winfo_width()
+            bar.delete("all")
+            bar.create_line(3, 3, max(3, w - 3), 3, width=6, capstyle="round", fill=p["track"])
+            bar.create_line(3, 3, 3 + max(0, w - 6) * f["score"] / 100, 3, width=6,
+                            capstyle="round", fill=color if f["level"] != "吉" else p["bar"])
+        bar.bind("<Configure>", draw_bar)
+
+        tk.Frame(card, height=1, bg=p["hairline"]).pack(fill="x")
+        yj = tk.Frame(card, pady=10, **S)
+        yj.pack(fill="x")
+        for col, (word, items, c2) in enumerate((("宜", f["yi"], p["green"]),
+                                                 ("忌", f["ji"], p["up"]))):
+            fr = tk.Frame(yj, **S)
+            fr.grid(row=0, column=col, sticky="nw", padx=(0, 24) if col == 0 else 0)
+            tk.Label(fr, text=word, fg=c2, font=(FONT, 12, "bold"), **S).pack(anchor="w")
+            for it in items:
+                tk.Label(fr, text=it, fg=p["text"], font=(FONT, 10), **S).pack(anchor="w")
+        yj.grid_columnconfigure(0, weight=1)
+        yj.grid_columnconfigure(1, weight=1)
+
+        foot = tk.Frame(body, pady=10, **G)
+        foot.pack(fill="x")
+        tk.Label(foot, text="每天一签，明天再来", fg=p["text3"], font=(FONT, 9),
+                 **G).pack(side="left", padx=4)
+        PillButton(foot, "好的", p["accent"], p["on_accent"], win.destroy, p["ground"],
+                   (FONT, 10)).pack(side="right")
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.bind("<Return>", lambda _e: win.destroy())
+
+        # 放在悬浮窗旁边：左边放得下就放左边，否则放右边
+        win.update_idletasks()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        x = self.root.winfo_x() - w - 12
+        if x < 0:
+            x = self.root.winfo_x() + self.root.winfo_width() + 12
+        y = max(0, min(self.root.winfo_y(), win.winfo_screenheight() - h - 60))
+        win.geometry(f"+{x}+{y}")
 
     # ---------- 设置窗口 ----------
     def open_settings(self):
