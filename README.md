@@ -45,6 +45,26 @@
 | `hungry_1.png` … | 饿了 | 饱腹太低 |
 | `work_1.png` … | 上班敲电脑 | 上班时间 |
 | `rain` / `snow` / `cold` / `hot` / `sunny` | 下雨、下雪、冷（≤0°C）、热（≥28°C）、晴天 | 跟着天气 |
+| `loaf` / `look` / `knead` / `nap` | 揣手趴成面包、歪头张望、踩奶、侧躺打盹 | 平时随机出现，待一会儿 |
+| `tailwag` / `upside` / `curious` / `liquid` / `pancake` / `rub` | 摇尾巴、四脚朝天、好奇、液体猫、猫饼、撒娇蹭你（亲密度 Lv.3 起） | 平时随机出现，待一会儿 |
+| `groom` / `yawn` / `stretch` / `scratch` / `earflick` / `lickbelly` / `licktail` / `shake` / `drink` / `hairball` | 舔爪洗脸、打哈欠、伸懒腰、挠耳朵、抖耳朵、舔肚皮、舔尾巴、抖身体、喝水、吐毛球 | 平时随机穿插，做两遍就回去 |
+| `nap` / `upsleep` / `twitch` | 侧躺睡、四脚朝天睡、睡梦抽动 | 睡觉时和 `sleep` 轮换 |
+
+**互动动作**（可选，缺了会用相近的动作代替）：
+
+| 文件名 | 动作 | 什么时候出现 |
+|---|---|---|
+| `pet` / `belly` | 被摸头眯眼、翻肚皮 | 鼠标在猫身上来回划；摸久了翻肚皮，偶尔“偷袭”你一拳 |
+| `annoyed` / `angry` | 不耐烦甩尾、生气飞机耳 | 连续戳几下 / 戳太多（之后一分钟不理你） |
+| `carried` / `land` | 被拎起、落地 | 拖动猫时 / 松手 |
+| `roll` / `punch` | 打滚、猫猫拳 | 双击 |
+| `drowsy` / `wake` | 犯困点头、惊醒 | 你离开电脑 5 分钟 / 回来时（只支持 Windows） |
+| `beg` / `full` | 讨食、吃饱舔嘴 | 饿了但有零食 / 喂完 |
+| `excited` / `sad` | 兴奋、委屈 | 快下班、下班那一刻、抽到大吉 / 抽到凶 |
+| `scared` | 害怕炸毛 | 睡着被戳、打雷 |
+| `watchl` / `watchr` / `swatl` / `swatr` | 盯着左 / 右边、往左 / 右伸爪拍 | 鼠标靠近猫时 |
+
+头顶小特效（可选，16×16）：`fx_heart`、`fx_question`、`fx_exclaim`、`fx_anger`、`fx_note`、`fx_sweat`。
 
 食物和玩具图标（可选）：`snack.png`、`freeze_dried.png`、`can.png`、`wand.png`。缺的动作用"平时"代替。
 

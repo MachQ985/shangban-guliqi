@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.5.0"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.6.0"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -900,14 +900,48 @@ def set_autostart(on):
 
 
 # ---------- 桌宠：素材处理（只用 Tk，不依赖 PIL） ----------
+# 平时的小动作：LOOP 循环待一会儿，ONCE 做两遍就回到平时
+PET_EXTRA_LOOP = ["loaf", "look", "knead", "nap", "tailwag", "upside", "curious",
+                  "liquid", "pancake", "rub"]
+PET_EXTRA_ONCE = ["groom", "yawn", "stretch", "scratch", "earflick", "lickbelly",
+                  "licktail", "shake", "drink", "hairball"]
+PET_ONCE_WEIGHT = {"hairball": .25}           # 吐毛球少一点，其他默认 1
+PET_SLEEP_POSES = ["sleep", "nap", "upsleep"]  # 睡觉时轮换的睡姿
+# 互动动作：被摸、被戳、被拎起、双击、离开电脑、上班事件时用
+PET_INTERACT = ["pet", "belly", "angry", "annoyed", "carried", "land", "roll", "punch",
+                "drowsy", "wake", "beg", "full", "excited", "sad",
+                "scared", "twitch", "upsleep", "watchl", "watchr", "swatl", "swatr"]
+# 素材里缺某个动作时用谁代替（可以连环找），最后都落到 idle
+PET_FALLBACK = {"click": "happy", "pet": "happy", "belly": "happy", "angry": "click",
+                "annoyed": "idle", "carried": "click", "land": "idle", "roll": "play",
+                "punch": "play", "drowsy": "idle", "wake": "click", "beg": "hungry",
+                "full": "happy", "excited": "happy", "sad": "idle",
+                "scared": "angry", "twitch": "sleep", "upsleep": "nap", "watchl": "look",
+                "watchr": "look", "swatl": "play", "swatr": "play", "curious": "look",
+                "rub": "pet"}
+PET_EFFECTS = ["heart", "question", "exclaim", "anger", "note", "sweat"]  # 头顶小特效 fx_*.png
 PET_STATES = ["idle", "eat", "play", "sleep", "happy", "click", "hungry", "work",
-              "rain", "snow", "cold", "hot", "sunny"]
+              "rain", "snow", "cold", "hot", "sunny"] + PET_EXTRA_LOOP + PET_EXTRA_ONCE + PET_INTERACT
 PET_STATE_NAMES = {"idle": "平时", "eat": "吃饭", "play": "玩耍", "sleep": "睡觉", "happy": "开心",
                    "click": "被戳", "hungry": "饿了", "work": "上班", "rain": "下雨", "snow": "下雪",
-                   "cold": "寒冷", "hot": "炎热", "sunny": "晴天"}
+                   "cold": "寒冷", "hot": "炎热", "sunny": "晴天",
+                   "loaf": "揣手趴着", "look": "张望", "knead": "踩奶", "groom": "舔爪洗脸",
+                   "yawn": "打哈欠", "stretch": "伸懒腰", "scratch": "挠耳朵", "nap": "躺着睡",
+                   "pet": "被摸头", "belly": "翻肚皮", "angry": "生气", "annoyed": "不耐烦",
+                   "carried": "被拎起", "land": "落地", "roll": "打滚", "punch": "猫猫拳",
+                   "drowsy": "犯困", "wake": "惊醒", "beg": "讨食", "full": "吃饱舔嘴",
+                   "excited": "兴奋", "sad": "委屈",
+                   "earflick": "抖耳朵", "tailwag": "摇尾巴", "upside": "四脚朝天",
+                   "lickbelly": "舔肚皮", "licktail": "舔尾巴", "shake": "抖身体",
+                   "hairball": "吐毛球", "scared": "害怕", "curious": "好奇", "rub": "撒娇",
+                   "drink": "喝水", "liquid": "液体猫", "pancake": "猫饼", "twitch": "睡梦抽动",
+                   "upsleep": "四脚朝天睡", "watchl": "往左看", "watchr": "往右看",
+                   "swatl": "往左拍", "swatr": "往右拍"}
 PET_ICONS = ["snack", "freeze_dried", "can", "wand"]
 PET_DIR = os.path.join(CONF_DIR, "pet")
 PET_SIZE, PET_GROUND, PET_ICON = 64, 56, 32   # 帧 64×64，脚底在第 56 行；图标 32×32
+PET_FX = 16                                   # 头顶特效 16×16
+PET_TOP = 16                                  # 猫窗口上方多留的高度，给特效往上飘
 PET_CAT_HEIGHT = 46                           # 自动处理时，平时坐姿缩放到大约这么高
 PET_KEY = "#ff00fe"                           # 读图时用这个颜色标记透明像素
 PET_FPS_MS = 250
@@ -924,7 +958,9 @@ def _pet_scan(src):
             continue
         m = pat.match(name)
         base = m.group(1).lower() if m else ""
-        if m and base in PET_STATES:
+        if m and base.startswith("fx_") and base[3:] in PET_EFFECTS:
+            icons["fx_" + base[3:]] = path
+        elif m and base in PET_STATES:
             frames.setdefault(base, []).append((int(m.group(2) or 0), path))
         elif m and base in PET_ICONS:
             icons[base] = path
@@ -1134,10 +1170,13 @@ def import_pet_assets(src, progress=None):
             _pet_write(g, os.path.join(tmp, name))
             out_frames.setdefault(st, []).append(name)
 
-    out_icons = {}
+    out_icons, out_fx = {}, {}
     for ic, p in icons.items():
         name = f"{ic}.png"
-        if is_std(p, PET_ICON):
+        size = PET_FX if ic.startswith("fx_") else PET_ICON
+        if ic.startswith("fx_"):
+            out_fx[ic[3:]] = name
+        if is_std(p, size):
             shutil.copy(p, os.path.join(tmp, name))
         else:
             g, k = _pet_read(p)
@@ -1145,11 +1184,12 @@ def import_pet_assets(src, progress=None):
             bb = _pet_bbox(g)
             if not bb:
                 continue
-            s = (PET_ICON - 4) / ((max(bb[2] - bb[0], bb[3] - bb[1]) + 1) * k)
+            s = (size - 2) / ((max(bb[2] - bb[0], bb[3] - bb[1]) + 1) * k)
             g = _pet_resample(g, k, s, (bb[0] + bb[2] + 1) / 2 * k, (bb[1] + bb[3] + 1) / 2 * k,
-                              PET_ICON, PET_ICON / 2, PET_ICON / 2)
+                              size, size / 2, size / 2)
             _pet_write(_pet_quantize([g])[0], os.path.join(tmp, name))
-        out_icons[ic] = name
+        if not ic.startswith("fx_"):
+            out_icons[ic] = name
 
     name = os.path.basename(os.path.normpath(src))
     try:  # 素材自带清单（比如 Codex 做的）里写了名字就用它
@@ -1158,7 +1198,7 @@ def import_pet_assets(src, progress=None):
     except (OSError, ValueError):
         pass
     with open(os.path.join(tmp, "manifest.json"), "w", encoding="utf-8") as f:
-        json.dump({"name": name, "states": out_frames, "icons": out_icons,
+        json.dump({"name": name, "states": out_frames, "icons": out_icons, "effects": out_fx,
                    "ground_y": PET_GROUND, "frame_duration_ms": PET_FPS_MS,
                    "processed": not std}, f, ensure_ascii=False, indent=2)
     if os.path.isdir(PET_DIR):
@@ -1180,14 +1220,31 @@ PET_WAND_MOOD = 20
 PET_DECAY = {"full": 4, "mood": 3}  # 每小时掉多少
 
 
+def user_idle_seconds():
+    """用户多久没碰鼠标键盘（秒）。Windows 直接问系统；Mac 暂不支持，返回 0。"""
+    if IS_MAC:
+        return 0
+    try:
+        class LII(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        lii = LII()
+        lii.cbSize = ctypes.sizeof(LII)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            return ((ctypes.windll.kernel32.GetTickCount() - lii.dwTime) & 0xFFFFFFFF) / 1000
+    except Exception:
+        pass
+    return 0
+
+
 class Pet:
     """趴在悬浮窗顶上的小猫：透明小窗跟着悬浮窗走，按状态播放素材动画。"""
 
     def __init__(self, app):
         self.app = app
         self.win = self.cv = self.img_id = self.panel = None
-        self.frames, self.icons, self.manifest = {}, {}, {}
+        self.frames, self.icons, self.effects, self.manifest = {}, {}, {}, {}
         self.state, self.idx, self.st = "idle", 0, "work"
+        self.offset, self.dragging, self.near_off = (0, 0), False, False
         self.transient = []          # [(动作, 结束时间), …] 吃 / 玩 / 被戳之后依次播放
         self.ambient, self.ambient_until = "idle", 0
         self.last_save = 0
@@ -1205,7 +1262,7 @@ class Pet:
 
     def reload(self):
         """（重新）读取素材并建窗口；没导入素材或关掉了宠物就不显示。"""
-        self.frames, self.icons, self.manifest = {}, {}, {}
+        self.frames, self.icons, self.effects, self.manifest = {}, {}, {}, {}
         if self.win is not None:
             self.win.destroy()
             self.win = None
@@ -1220,6 +1277,8 @@ class Pet:
                 self.frames[st] = [tk.PhotoImage(file=os.path.join(PET_DIR, n)).zoom(z) for n in names]
             for ic, n in self.manifest.get("icons", {}).items():
                 self.icons[ic] = tk.PhotoImage(file=os.path.join(PET_DIR, n))
+            for fx, n in self.manifest.get("effects", {}).items():
+                self.effects[fx] = tk.PhotoImage(file=os.path.join(PET_DIR, n)).zoom(z)
         except Exception:
             self.frames = {}
             return
@@ -1239,28 +1298,66 @@ class Pet:
         else:
             self.win.attributes("-transparentcolor", PET_KEY)
         self.win.configure(bg=bg)
-        self.cv = tk.Canvas(self.win, width=s, height=s, bg=bg, highlightthickness=0, bd=0,
+        self.cv = tk.Canvas(self.win, width=s, height=s + PET_TOP * self.zoom(), bg=bg,
+                            highlightthickness=0, bd=0,
                             cursor="hand2")
         self.cv.pack()
-        self.img_id = self.cv.create_image(0, 0, anchor="nw", image=self.frames["idle"][0])
+        self.img_id = self.cv.create_image(0, PET_TOP * self.zoom(), anchor="nw",
+                                           image=self.frames["idle"][0])
         self.cv.bind("<ButtonPress-1>", self.on_press)
-        self.cv.bind("<B1-Motion>", self.app.drag_move)
+        self.cv.bind("<B1-Motion>", self.on_drag)
         self.cv.bind("<ButtonRelease-1>", self.on_release)
-        self.cv.bind("<Double-Button-1>", lambda _e: "break")
+        self.cv.bind("<Double-Button-1>", self.on_double)
+        self.cv.bind("<Motion>", self.on_hover)
         for seq in ("<Button-3>",) + (("<Button-2>", "<Control-Button-1>") if IS_MAC else ()):
             self.cv.bind(seq, lambda _e: self.open_panel())
         self.follow()
 
     def follow(self):
-        """猫的脚踩在悬浮窗上边缘，靠右。"""
+        """猫的脚踩在悬浮窗上边缘，靠右（窗口上方多留 PET_TOP 给头顶特效）。"""
         if self.win is None:
             return
         r, z = self.app.root, self.zoom()
         s = PET_SIZE * z
-        x = r.winfo_x() + r.winfo_width() - s - 14
-        y = r.winfo_y() - (PET_GROUND + 1) * z + 3 * z
-        self.win.geometry(f"{s}x{s}+{x}+{max(0, y)}")
+        dx, dy = self.offset
+        x = r.winfo_x() + r.winfo_width() - s - 14 + dx
+        y = r.winfo_y() - (PET_TOP + PET_GROUND + 1) * z + 3 * z + dy
+        self.win.geometry(f"{s}x{s + PET_TOP * z}+{x}+{max(0, y)}")
         self.win.lift()
+
+    def jiggle(self, kind="bounce"):
+        """程序化小动作，不用画新帧：bounce 弹一下，shake 抖几下。"""
+        z = self.zoom()
+        seq = [(0, -3), (0, -5), (0, -3), (0, -1), (0, 0)] if kind == "bounce" else \
+              [(-1, 0), (1, 0), (-1, 0), (1, 0), (-1, 0), (0, 0)]
+
+        def step(i=0):
+            if self.win is None:
+                return
+            self.offset = (seq[i][0] * z, seq[i][1] * z)
+            self.follow()
+            if i + 1 < len(seq):
+                self.app.root.after(45, step, i + 1)
+        step()
+
+    def fx(self, name):
+        """头顶冒一个小特效（爱心、问号、感叹号…），往上飘一会儿就消失。"""
+        img = self.effects.get(name)
+        if self.win is None or img is None:
+            return
+        z = self.zoom()
+        item = self.cv.create_image((PET_SIZE // 2 + random.randint(6, 16)) * z,
+                                    (PET_TOP + 12) * z, image=img, anchor="s")
+
+        def rise(i=0):
+            if self.win is None:
+                return
+            if i >= 12:
+                self.cv.delete(item)
+                return
+            self.cv.move(item, 0, -z)
+            self.app.root.after(80, rise, i + 1)
+        self.app.root.after(80, rise)
 
     # ----- 状态 -----
     def decay(self):
@@ -1292,9 +1389,9 @@ class Pet:
         return new
 
     def update(self, r, st, conf):
-        """悬浮窗每次刷新时调用：衰减、发吃的、定时存盘。"""
+        """悬浮窗每次刷新时调用：衰减、发吃的、上班事件、定时存盘。"""
         import time
-        self.st = st
+        prev, self.st = self.st, st
         self.decay()
         new = self.earn(r, st, conf)
         if new:
@@ -1303,11 +1400,40 @@ class Pet:
             self.save()
         elif time.time() - self.last_save > 60:
             self.save()
+        if self.win is None:
+            return
+        # 上班事件联动
+        self.near_off = st == "work" and r.get("remain") is not None and r["remain"] <= 300
+        if prev == "work" and st == "after":          # 下班那一刻：跳起来
+            self.play("excited", 3, "happy", 3)
+            self.fx("note")
+            self.jiggle()
+        today = dt.date.today().isoformat()
+        tm = gas_tomorrow()
+        if tm and tm[0] < 0 and st in ("before", "work") and self.data.get("gas_cheer") != today:
+            self.data["gas_cheer"] = today            # 明天油价跌：每天开心一次
+            self.play("happy", 2.5)
+            self.fx("note")
 
     def save(self):
         import time
         self.last_save = time.time()
         save_conf(self.app.conf)
+
+    def has_food(self):
+        return any(v > 0 for v in self.data["inv"].values())
+
+    def sleep_pose_now(self, now):
+        """几种睡姿轮换（蜷着、侧躺、四脚朝天），每种睡 1–3 分钟；蜷着睡时偶尔睡梦抽动。"""
+        poses = [x for x in PET_SLEEP_POSES if x in self.frames] or ["sleep"]
+        if now >= getattr(self, "sleep_until", 0) or getattr(self, "sleep_pose", None) not in poses:
+            others = [x for x in poses if x != getattr(self, "sleep_pose", None)] or poses
+            self.sleep_pose = random.choice(others)
+            self.sleep_until = now + random.uniform(60, 180)
+        if self.sleep_pose == "sleep" and "twitch" in self.frames and random.random() < .004:
+            self.play("twitch", 1.5)               # 平均一两分钟抽一下
+            return "twitch"
+        return self.sleep_pose
 
     def pick_state(self):
         import time
@@ -1316,21 +1442,77 @@ class Pet:
             self.transient.pop(0)
         if self.transient:
             return self.transient[0][0]
+
+        # 你离开电脑：5 分钟犯困，10 分钟睡着；回来时惊醒、伸个懒腰
+        away = user_idle_seconds()
+        if away >= 300:
+            self.was_away = True
+            return self.sleep_pose_now(now) if away >= 600 else "drowsy"
+        if getattr(self, "was_away", False) and away < 3:
+            self.was_away = False
+            self.fx("exclaim")
+            self.play("wake", 1.2, "stretch" if "stretch" in self.frames else "idle", 1.5)
+            return "wake"
+
         if self.data["full"] < 25:
-            return "hungry"
+            return "beg" if self.has_food() else "hungry"
         hour = dt.datetime.now().hour
         if self.st in ("after", "off") or hour >= 22 or hour < 6:
-            return "sleep"
-        if now >= self.ambient_until:  # 每 20 秒换一个“平常状态”：天气 / 上班 / 平时
+            return self.sleep_pose_now(now)
+        watch = self.watch_cursor(now)
+        if watch:
+            return watch
+        if now >= self.ambient_until:  # 每 12–20 秒换一个“平常状态”：天气 / 上班 / 平时 / 小动作
             wx = LIVE.get("wx") or {}
             kind, t = wx_kind(wx.get("now_c", "")), wx.get("now_t")
             weather = "snow" if kind == "snow" else "rain" if kind in ("rain", "mix", "thunder") \
                 else "cold" if t is not None and t <= 0 else "hot" if t is not None and t >= 28 \
                 else "sunny" if kind == "sun" and 8 <= hour < 18 else None
+            if kind == "thunder" and random.random() < .4:
+                weather = "scared"                 # 打雷：有时吓一跳
+            loops = [x for x in PET_EXTRA_LOOP if x in self.frames
+                     and (x != "rub" or self.data["love"] >= 20)]  # 亲密度 Lv.3 起才撒娇
             pool = ["idle", "idle"] + (["work", "work"] if self.st == "work" else []) + \
-                   ([weather] * 3 if weather else [])
-            self.ambient, self.ambient_until = random.choice(pool), now + 20
+                   ([weather] * 3 if weather else []) + loops + \
+                   (["excited"] * 4 if getattr(self, "near_off", False) else [])  # 快下班了
+            self.ambient, self.ambient_until = random.choice(pool), now + random.uniform(12, 20)
+            if self.ambient == "cold":
+                self.jiggle("shake")
+            # 有时先插一个“做一次”的小动作（舔爪、打哈欠、伸懒腰、挠耳朵），做完回到平常状态
+            once = [x for x in PET_EXTRA_ONCE if x in self.frames]
+            if once and random.random() < .45:
+                x = random.choices(once, weights=[PET_ONCE_WEIGHT.get(o, 1) for o in once])[0]
+                secs = len(self.frames[x]) * self.frame_ms() / 1000 * 2
+                self.play(x, secs)
+                self.ambient_until += secs
+                return x
         return self.ambient
+
+    def watch_cursor(self, now):
+        """鼠标靠近：转头盯着鼠标那边；很近时偶尔伸爪拍过去。没有这组素材就不做。"""
+        if not ("watchl" in self.frames or "watchr" in self.frames) or self.win is None:
+            return None
+        try:
+            mx, my = self.app.root.winfo_pointerxy()
+        except tk.TclError:
+            return None
+        z = self.zoom()
+        cx = self.win.winfo_rootx() + PET_SIZE * z / 2
+        cy = self.win.winfo_rooty() + (PET_TOP + 32) * z
+        dx, dy = mx - cx, my - cy
+        dist = (dx * dx + dy * dy) ** .5
+        inside = abs(dx) < 22 * z and abs(dy) < 26 * z  # 鼠标在猫身上：交给摸摸 / 点击处理
+        if inside or dist > 90 * z or abs(dx) < 10 * z:
+            return None
+        side = "l" if dx < 0 else "r"
+        if dist < 45 * z and now - getattr(self, "swat_at", 0) > 6 and random.random() < .15:
+            self.swat_at = now
+            self.play("swat" + side, 1, "watch" + side, 1)
+            return "swat" + side
+        return "watch" + side
+
+    def frame_ms(self):
+        return int(self.manifest.get("frame_duration_ms", PET_FPS_MS))
 
     def play(self, *seq):
         """插播一串动作：play("eat", 3, "happy", 2)。"""
@@ -1341,30 +1523,139 @@ class Pet:
             self.transient.append((st, t))
         self.idx = 0
 
+    def resolve(self, st):
+        """素材里没有这个动作：按 PET_FALLBACK 找替身，最后用 idle。"""
+        seen = set()
+        while st not in self.frames and st not in seen:
+            seen.add(st)
+            st = PET_FALLBACK.get(st, "idle")
+        return st if st in self.frames else "idle"
+
     def animate(self):
         if self.win is not None and self.frames:
-            st = self.pick_state()
-            if st not in self.frames:
-                st = "happy" if st == "click" and "happy" in self.frames else "idle"
+            st = self.resolve(self.pick_state())
             if st != self.state:
                 self.state, self.idx = st, 0
             fr = self.frames[st]
             self.cv.itemconfigure(self.img_id, image=fr[self.idx % len(fr)])
             self.idx += 1
-        self.app.root.after(int(self.manifest.get("frame_duration_ms", PET_FPS_MS)), self.animate)
+        self.app.root.after(self.frame_ms(), self.animate)
 
     # ----- 互动 -----
+    def sulking(self):
+        import time
+        return time.time() < self.data.get("sulk_until", 0)
+
     def on_press(self, e):
         self._press = (e.x_root, e.y_root)
+        self.dragging = False
         self.app.drag_start(e)
 
-    def on_release(self, e):
+    def on_drag(self, e):
+        """拖着猫：悬浮窗跟着走，猫换成被拎起的样子。"""
+        self.app.drag_move(e)
         px, py = getattr(self, "_press", (e.x_root, e.y_root))
-        if abs(e.x_root - px) > 4 or abs(e.y_root - py) > 4:
-            self.app.drag_end(e)  # 拖着猫也能挪悬浮窗
+        if not self.dragging and (abs(e.x_root - px) > 4 or abs(e.y_root - py) > 4):
+            self.dragging = True
+            self.play("carried", 3600)
+
+    def on_release(self, e):
+        import time
+        if getattr(self, "skip_release", False):  # 双击的第二下松开，不再当单击
+            self.skip_release = False
+            return
+        if self.dragging:                          # 松手：落地，弹一下
+            self.dragging = False
+            self.app.drag_end(e)
+            self.play("land", .6, "happy", 1.2)
+            self.jiggle()
+            return
+        now = time.time()
+        self.clicks = [t for t in getattr(self, "clicks", []) if now - t < 6] + [now]
+        recent = sum(1 for t in self.clicks if now - t < 3)
+        if self.state in PET_SLEEP_POSES + ["twitch"]:  # 睡着被戳：吓一跳
+            self.play("scared", 1, "annoyed", 1.5)
+            self.fx("exclaim")
+            self.jiggle("shake")
+            self.data["mood"] = max(0.0, self.data["mood"] - 1)
+            return
+        if self.sulking():                         # 还在生气：不理你
+            self.play("annoyed", 1.5)
+            self.fx("anger")
+            return
+        if len(self.clicks) >= 7:                  # 戳太多：生气，一分钟内不理你
+            self.data["mood"] = max(0.0, self.data["mood"] - 5)
+            self.data["sulk_until"] = now + 60
+            self.clicks = []
+            self.play("angry", 3, "annoyed", 3)
+            self.fx("anger")
+            self.jiggle("shake")
+            self.app.flash(f"{self.manifest.get('name') or '小猫'}生气了，一分钟内不理你")
+            return
+        if recent >= 4:                            # 戳得有点多：不耐烦
+            self.play("annoyed", 2)
+            self.fx("sweat")
             return
         self.data["mood"] = min(100.0, self.data["mood"] + 1)
         self.play("click", .7, "happy", 1.5)
+        self.jiggle()
+        self.fx(random.choice(["exclaim", "question", "heart"]))
+
+    def on_double(self, _e):
+        """双击：打滚或出猫猫拳。"""
+        self.skip_release = True
+        if self.sulking():
+            self.fx("anger")
+            return "break"
+        if random.random() < .5:
+            self.play("roll", 2, "happy", 1.5)
+        else:
+            self.play("punch", 1.2, "happy", 1.5)
+            self.jiggle()
+        return "break"
+
+    def on_hover(self, e):
+        """鼠标在猫身上来回划 = 摸摸：眯眼享受，摸久了翻肚皮，偶尔“偷袭”你一拳。"""
+        import time
+        now = time.time()
+        pts = [(t, x) for t, x in getattr(self, "stroke", []) if now - t < 1.2] + [(now, e.x)]
+        self.stroke = pts
+        xs = [x for _, x in pts]
+        turns = sum(1 for a, b, c in zip(xs, xs[1:], xs[2:]) if (b - a) * (c - b) < 0)
+        travel = sum(abs(b - a) for a, b in zip(xs, xs[1:]))
+        if turns < 2 or travel < 25 * self.zoom() or now - getattr(self, "pet_at", 0) < .8:
+            return
+        if self.sulking() or self.dragging:
+            return
+        first = now - getattr(self, "pet_at", 0) > 2.5
+        self.pet_time = 0 if first else getattr(self, "pet_time", 0) + (now - self.pet_at)
+        self.pet_at = now
+        self.data["mood"] = min(100.0, self.data["mood"] + .5)
+        if now - self.data.get("love_pet_at", 0) > 30:  # 摸摸加亲密度，30 秒最多一次
+            self.data["love_pet_at"] = now
+            self.data["love"] += 1
+        if self.pet_time > 5 and random.random() < .5:
+            if random.random() < .35:
+                self.play("belly", 2, "punch", 1.2, "happy", 1.5)  # 翻肚皮的陷阱
+            else:
+                self.play("belly", 3, "happy", 1.5)
+            self.pet_time = 0
+        else:
+            self.play("pet", 1.6, "happy", 1.2)
+        if random.random() < .5:
+            self.fx("heart")
+
+    def react_fortune(self, level):
+        """抽完签的反应。"""
+        if level in ("大吉", "中吉"):
+            self.play("excited", 3, "happy", 2)
+            self.fx("heart")
+            self.jiggle()
+        elif level in ("凶", "末吉"):
+            self.play("sad", 3, "idle", .5)
+            self.fx("sweat")
+        else:
+            self.play("happy", 2)
 
     def feed(self, key):
         food = next(f for f in PET_FOODS if f[0] == key)
@@ -1375,7 +1666,11 @@ class Pet:
         self.data["full"] = min(100.0, self.data["full"] + food[3])
         self.data["mood"] = min(100.0, self.data["mood"] + food[4])
         self.data["love"] += 1
-        self.play("eat", 3, "happy", 2)
+        if "drink" in self.frames:
+            self.play("eat", 3, "full", 1.5, "drink", 1.5, "happy", 2)
+        else:
+            self.play("eat", 3, "full", 1.5, "happy", 2)
+        self.fx("heart")
         self.save()
 
     def wand_left(self):
@@ -1390,6 +1685,7 @@ class Pet:
         self.data["mood"] = min(100.0, self.data["mood"] + PET_WAND_MOOD)
         self.data["love"] += 1
         self.play("play", 4, "happy", 2)
+        self.fx("note")
         self.save()
 
     # ----- 喂养面板 -----
@@ -2081,6 +2377,8 @@ class Floater:
             self.fortune_anim = False
             self.conf["fortune_day"] = today.isoformat()
             save_conf(self.conf)
+            if getattr(self, "pet", None):
+                self.pet.react_fortune(fortune_for(today)["level"])
             self.refresh_fortune()
             self.root.after(250, self.show_fortune_card)
 
@@ -2443,13 +2741,13 @@ class Floater:
         pet_group.hint.configure(text=chr(10).join([
             "选一个放 PNG 图片的文件夹，按动作给文件命名：",
             "必需：idle_1.png（平时）",
-            "可选：eat、play、sleep、happy、click、hungry、",
-            "work、rain、snow、cold、hot、sunny",
-            "多帧动画：idle_1、idle_2、idle_3…",
-            "图标：snack、freeze_dried、can、wand",
+            "常用：eat、play、sleep、happy、hungry、work…",
+            "完整的 50 多个动作名见 GitHub 首页“做自己的小猫”",
+            "多帧动画：idle_1、idle_2、idle_3…，缺的动作自动找替身",
             "任意大小都行；透明或纯绿色背景最好，",
             "会自动抠图、缩成像素风并对齐。",
-            "左键点猫有反应，右键猫打开喂食面板。"]))
+            "互动：点它、连戳、双击、拖着走、在它身上来回划（摸摸），",
+            "鼠标靠近它会盯着看；右键猫打开喂食面板。"]))
 
         # 底部：错误提示 + 按钮
         err = tk.Label(body, text="", fg=p["danger"], font=(FONT, 9), anchor="w",
