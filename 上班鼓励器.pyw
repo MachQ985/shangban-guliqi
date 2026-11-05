@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.1.0"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.2.0"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -44,7 +44,8 @@ DEFAULT = {
     "x": None,
     "y": None,
     "mini": False,
-    "theme": "auto",  # auto 跟随系统 / light / dark
+    "theme": "auto",
+    "city": "on-143",  # 天气城市（加拿大环境部编号），默认多伦多  # auto 跟随系统 / light / dark
 }
 
 # ---------- 外观（苹果风：冷白 / 深灰底，黑白灰分层，颜色只给钱、倒计时和进度） ----------
@@ -165,6 +166,22 @@ CHEERS = {
         "睡到自然醒，是休息日的特权", "工作是工作，生活是生活", "今天的任务：开心",
         "出去走走，晒晒太阳", "陪陪家人朋友吧", "休息好了，才能更好地搞钱",
         "放下手机里的工作群", "今天不打卡，只打卡快乐", "好好吃饭，好好睡觉",
+    ],
+    # 以下按天气混进上班 / 没上班时的鼓励语
+    "rain": [
+        "下班可能下雨，记得带伞", "外面下雨，屋里赚钱刚刚好", "雨天适合安心搬砖",
+        "雨再大也挡不住发工资", "带好伞，下班不淋雨", "听着雨声赚钱，也挺好",
+    ],
+    "snow": [
+        "下班可能下雪，路上慢点", "外面下雪，工位暖和", "雪天路滑，早点出门别着急",
+        "下雪了，赚完钱回家吃火锅",
+    ],
+    "cold": [
+        "外面冷，工位暖，钱也暖", "天冷多穿点，感冒了不划算", "冷天搬砖，热乎乎的工资",
+        "出门记得戴帽子手套",
+    ],
+    "hot": [
+        "外面热，空调房里赚钱真香", "天热多喝水", "热天心别躁，工资照样涨",
     ],
 }
 
@@ -440,6 +457,137 @@ def gas_tomorrow():
     return g["change"], g["price"]
 
 
+# ---------- 天气：加拿大环境部（政府公开数据，商用免费） ----------
+WX_URL = "https://api.weather.gc.ca/collections/citypageweather-realtime/items/{}?f=json&skipGeometry=true"
+WX_EVERY = 30 * 60
+# 设置里可选的城市：(中文名, 环境部编号)
+CITIES = [
+    ("多伦多", "on-143"), ("密西沙加", "on-24"), ("布兰普顿", "on-4"), ("旺市", "on-64"),
+    ("万锦", "on-85"), ("列治文山", "on-59"), ("奥克维尔", "on-79"), ("伯灵顿", "on-95"),
+    ("汉密尔顿", "on-77"), ("皮克林", "on-54"), ("奥沙瓦", "on-117"), ("惠特比", "on-119"),
+    ("纽马基特", "on-25"), ("卡利登", "on-32"), ("霍尔顿山", "on-68"), ("巴里", "on-151"),
+    ("基奇纳-滑铁卢", "on-82"), ("圭尔夫", "on-5"), ("剑桥", "on-81"), ("圣凯瑟琳斯", "on-107"),
+    ("尼亚加拉瀑布", "on-125"), ("伦敦（安省）", "on-137"), ("渥太华", "on-118"),
+    ("金斯顿", "on-69"), ("彼得伯勒", "on-121"), ("温莎", "on-94"),
+    ("大萨德伯里", "on-40"), ("雷湾", "on-100"),
+]
+WEEKDAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def wx_kind(text):
+    """英文天气 → 类别：thunder / mix / snow / rain / fog / sun / partly / cloud / other"""
+    t = (text or "").lower()
+    if "thunder" in t:
+        return "thunder"
+    if "freezing" in t or (("rain" in t or "shower" in t or "drizzle" in t)
+                           and ("snow" in t or "flurr" in t)):
+        return "mix"
+    if "snow" in t or "flurr" in t or "ice pellet" in t:
+        return "snow"
+    if "rain" in t or "shower" in t or "drizzle" in t or "precipitation" in t:
+        return "rain"
+    if "fog" in t or "mist" in t or "haze" in t or "smoke" in t:
+        return "fog"
+    if "mix of sun" in t or "partly" in t or "few clouds" in t or "mainly sunny" in t \
+            or "mainly clear" in t or "decreasing cloud" in t:
+        return "partly"
+    if "sun" in t or "clear" in t:
+        return "sun"
+    if "cloud" in t or "overcast" in t:
+        return "cloud"
+    return "other"
+
+
+WX_ICON = {"thunder": "⚡", "mix": "❄", "snow": "❄", "rain": "☂", "fog": "≋",
+           "sun": "☀", "partly": "⛅", "cloud": "☁", "other": "·"}
+
+
+def wx_zh(text):
+    """英文天气描述翻成简短中文，认不出的保留英文。"""
+    t = (text or "").lower()
+    maybe = "可能有" if "chance of" in t or "possibility" in t else ""
+    k = wx_kind(t)
+    if k == "thunder":
+        z = "雷阵雨"
+    elif k == "mix":
+        z = "冻雨" if "freezing" in t else "雨夹雪"
+    elif k == "snow":
+        z = "小雪" if "flurr" in t or "light" in t else "大雪" if "heavy" in t else "雪"
+    elif k == "rain":
+        z = "毛毛雨" if "drizzle" in t else "阵雨" if "shower" in t else \
+            "大雨" if "heavy" in t else "小雨" if "light" in t else \
+            "间歇性雨" if "periods" in t else "雨"
+    elif k == "fog":
+        z = "霾" if "haze" in t else "烟雾" if "smoke" in t else "雾"
+    elif k == "partly":
+        z = "大致晴朗" if "mainly sunny" in t or "mainly clear" in t else "晴间多云"
+    elif k == "sun":
+        z = "晴" if "sun" in t else "晴朗"
+    elif k == "cloud":
+        z = "多云" if "mostly" in t or "mainly" in t or "partly" in t else "阴"
+    else:
+        return text or ""
+    if "wind" in t and k in ("sun", "partly", "cloud"):
+        z += "，有风"
+    return maybe + z
+
+
+def fetch_wx(city):
+    p = json.loads(http_get(WX_URL.format(city), timeout=30))["properties"]
+    cc = p.get("currentConditions") or {}
+
+    def val(d):
+        return (d or {}).get("value", {}).get("en")
+
+    hourly = []
+    for h in (p.get("hourlyForecastGroup") or {}).get("hourlyForecasts", []):
+        when = dt.datetime.fromisoformat(h["timestamp"].replace("Z", "+00:00")).astimezone()
+        hourly.append({"time": when.replace(tzinfo=None).isoformat(timespec="minutes"),
+                       "t": val(h.get("temperature")), "c": (h.get("condition") or {}).get("en", ""),
+                       "pop": val(h.get("lop")) or 0})
+    daily = []
+    for f in (p.get("forecastGroup") or {}).get("forecasts", []):
+        temps = (f.get("temperatures") or {}).get("temperature") or [{}]
+        daily.append({"name": f["period"]["textForecastName"]["en"],
+                      "day": f["period"]["value"]["en"],
+                      "t": val(temps[0]), "cls": (temps[0].get("class") or {}).get("en"),
+                      "c": ((f.get("abbreviatedForecast") or {}).get("textSummary") or {}).get("en", "")})
+    warns = [(w.get("description") or {}).get("en", "") if isinstance(w, dict) else str(w)
+             for w in (p.get("warnings") or [])]
+    now_c = (cc.get("condition") or {}).get("en") or (hourly[0]["c"] if hourly else "")
+    LIVE["wx"] = {"city": city, "now_t": val(cc.get("temperature")), "now_c": now_c,
+                  "hourly": hourly, "daily": daily, "warnings": [w for w in warns if w]}
+
+
+def wx_at(when):
+    """某个时刻的逐小时预报（取那个整点）；不在 24 小时范围内返回 None。"""
+    wx = LIVE.get("wx")
+    if not wx:
+        return None
+    key = when.replace(minute=0, second=0, microsecond=0).isoformat(timespec="minutes")
+    return next((h for h in wx["hourly"] if h["time"] == key), None)
+
+
+def wx_day(offset):
+    """今天（0）或明天（1）的 (最高, 最低, 白天天气)，拿不到的项是 None。"""
+    wx = LIVE.get("wx")
+    if not wx:
+        return None
+    day = WEEKDAYS_EN[(dt.date.today() + dt.timedelta(days=offset)).weekday()]
+    hi = lo = cond = None
+    for f in wx["daily"]:
+        is_today = f["name"] in ("Today", "Tonight")
+        if (offset == 0 and not is_today) or (offset != 0 and is_today):
+            continue
+        if offset != 0 and not f["day"].startswith(day):
+            continue
+        if "night" in f["day"].lower() or f["name"] == "Tonight":
+            lo = f["t"]
+        else:
+            hi, cond = f["t"], f["c"]
+    return None if hi is None and lo is None else (hi, lo, cond)
+
+
 def live_worker(stop):
     """后台线程：按间隔取汇率和油价，失败就下次再试（不碰界面）。"""
     import time
@@ -461,12 +609,24 @@ def live_worker(stop):
             except Exception as ex:
                 LIVE["gas_error"] = str(ex)[:80]
                 LIVE["gas_fetched"] = now - GAS_EVERY + 600
+        city = WX_CITY[0]
+        wx = LIVE.get("wx") or {}
+        if now - LIVE.get("wx_fetched", 0) > WX_EVERY or wx.get("city") != city:
+            try:
+                fetch_wx(city)
+                LIVE["wx_fetched"] = now
+                changed = True
+            except Exception:
+                LIVE["wx_fetched"] = now - WX_EVERY + 300  # 5 分钟后重试
         if changed:
             save_live()
         if now - UPD["checked"] > UPDATE_EVERY:
             UPD["checked"] = now
             check_and_update()
-        stop.wait(60)
+        stop.wait(20)
+
+
+WX_CITY = ["on-143"]  # 界面线程改设置时写这里，后台线程读
 
 
 # ---------- 自动更新：从 GitHub 拿新版，替换自己，重启 ----------
@@ -643,6 +803,7 @@ class Floater:
         # 联网取汇率和油价放在后台线程，断网也不卡界面
         import threading
         load_live()
+        WX_CITY[0] = self.conf.get("city", "on-143")
         self.stop = threading.Event()
         threading.Thread(target=live_worker, args=(self.stop,), daemon=True).start()
 
@@ -719,7 +880,21 @@ class Floater:
         self.lbl_gas_price = tk.Label(gas, text="", fg=p["text3"], font=(FONT, 9), **S)
         self.lbl_gas_price.pack(side="right", anchor="s")
 
-        tk.Frame(self.frame, height=1, bg=p["hairline"]).pack(fill="x", pady=(12, 10))
+        # 天气：现在 / 下班时（下班后换成今晚）/ 明天
+        tk.Frame(self.frame, height=1, bg=p["hairline"]).pack(fill="x", pady=(12, 8))
+        self.wx_rows = []
+        for _ in range(3):
+            fr = tk.Frame(self.frame, **S)
+            fr.pack(fill="x", pady=(0, 3))
+            k = tk.Label(fr, text="", fg=p["text3"], font=(FONT, 9), width=5, anchor="w", **S)
+            k.pack(side="left", anchor="s")
+            v = tk.Label(fr, text="", fg=p["text"], font=(FONT, 10), **S)
+            v.pack(side="left", anchor="s")
+            r = tk.Label(fr, text="", fg=p["text3"], font=(FONT, 9), **S)
+            r.pack(side="right", anchor="s")
+            self.wx_rows.append((k, v, r))
+
+        tk.Frame(self.frame, height=1, bg=p["hairline"]).pack(fill="x", pady=(9, 10))
         self.lbl_cheer = tk.Label(self.frame, text="", fg=p["text2"], font=(FONT, 9),
                                   anchor="w", justify="left", wraplength=250, **S)
         self.lbl_cheer.pack(fill="x")
@@ -910,8 +1085,11 @@ class Floater:
             self.lbl_gas_price.configure(text=f"今日 {today_price:g} ¢/升" if today_price else "")
             self.mini_gas.configure(text="")
 
+        # 天气
+        wx_tags = self.refresh_wx(c, st)
+
         # 鼓励语：状态变了立刻换，否则每 CHEER_EVERY_SEC 秒换一句；
-        # 同一组洗牌后轮流出，整组说完才会重复
+        # 同一组洗牌后轮流出，整组说完才会重复。上班 / 没上班时混进天气相关的句子
         if st == "work":
             bucket = "early" if prog < .25 else "mid" if prog < .5 else \
                 "late" if prog < .9 else "final"
@@ -920,11 +1098,77 @@ class Floater:
         self.cheer_tick += 1
         if bucket != self.cheer_state or self.cheer_tick >= CHEER_EVERY_SEC * 5:
             if bucket != self.cheer_state or not self.cheer_bag:
-                self.cheer_bag = [s for s in CHEERS[bucket] if s != self.cheer]
+                pool = list(CHEERS[bucket])
+                if st in ("work", "before"):
+                    for tag in wx_tags:
+                        pool += CHEERS[tag]
+                self.cheer_bag = [s for s in pool if s != self.cheer]
                 random.shuffle(self.cheer_bag)
             self.cheer_state, self.cheer_tick = bucket, 0
             self.cheer = self.cheer_bag.pop()
             self.lbl_cheer.configure(text=self.cheer)
+
+    def refresh_wx(self, c, st):
+        """更新三行天气，返回要混进鼓励语的天气标签（rain / snow / cold / hot）。"""
+        p, wx = self.p, LIVE.get("wx")
+        rows = self.wx_rows
+        if not wx or wx.get("city") != c.get("city", "on-143"):
+            texts = [("天气", "获取中…", ""), ("", "", ""), ("", "", "")]
+            for (k, v, r), (a, b, d) in zip(rows, texts):
+                k.configure(text=a), v.configure(text=b, fg=p["text3"]), r.configure(text=d)
+            return []
+
+        now = dt.datetime.now()
+
+        def icon(cond, when):
+            kind = wx_kind(cond)
+            night = when.hour >= 18 or when.hour < 6
+            return "☾" if night and kind in ("sun", "partly") else WX_ICON[kind]
+
+        def deg(t):
+            return "—" if t is None else f"{round(t)}°"
+
+        def span(hi, lo):
+            if hi is not None and lo is not None:
+                return f"{round(min(hi, lo))}–{round(max(hi, lo))}°"
+            return deg(hi if hi is not None else lo)
+
+        texts, tags = [], []
+        # 1. 现在
+        today = wx_day(0)
+        warn = "⚠ 有天气警告" if wx.get("warnings") else ""
+        texts.append(("现在", f"{icon(wx['now_c'], now)} {deg(wx['now_t'])} {wx_zh(wx['now_c'])}",
+                      warn or (f"今天 {span(today[0], today[1])}" if today else ""), bool(warn)))
+        # 2. 下班时（还没下班）/ 今晚（已下班或休息日）
+        end = dt.datetime.combine(now.date(), parse_hm(c["end"]))
+        h = wx_at(end) if st in ("before", "work") else None
+        if h:
+            rainy = wx_kind(h["c"]) in ("rain", "mix", "thunder", "snow") or h["pop"] >= 40
+            texts.append(("下班", f"{icon(h['c'], end)} {deg(h['t'])} {wx_zh(h['c'])}",
+                          f"降水 {h['pop']}%" + ("，带伞" if rainy else ""), False))
+            if rainy:
+                tags.append("snow" if wx_kind(h["c"]) == "snow" else "rain")
+        else:
+            night = next((f for f in wx["daily"] if f["name"] == "Tonight"), None)
+            texts.append(("今晚", f"{icon(night['c'], end.replace(hour=21))} "
+                                  f"{deg(night['t'])} {wx_zh(night['c'])}" if night else "—",
+                          "", False))
+        # 3. 明天
+        tm = wx_day(1)
+        texts.append(("明天", f"{icon(tm[2], now.replace(hour=12))} {span(tm[0], tm[1])} "
+                              f"{wx_zh(tm[2])}" if tm else "—", "", False))
+
+        for (k, v, r), (a, b, d, alert) in zip(rows, texts):
+            k.configure(text=a)
+            v.configure(text=b, fg=p["text"])
+            r.configure(text=d, fg=p["danger"] if alert else p["text3"])
+
+        if wx["now_t"] is not None:
+            if wx["now_t"] <= -5:
+                tags.append("cold")
+            elif wx["now_t"] >= 28:
+                tags.append("hot")
+        return tags
 
     # ---------- 设置窗口 ----------
     def open_settings(self):
@@ -1067,6 +1311,12 @@ class Floater:
             chips.append(ch)
             paint(d)
 
+        # 天气
+        g = group("天气", "天气来自加拿大环境部")
+        city_names = {cid: n for n, cid in CITIES}
+        city_var = tk.StringVar(value=city_names.get(c.get("city", "on-143"), "多伦多"))
+        option(row(g, "城市"), city_var, [n for n, _ in CITIES])
+
         # 外观
         g = group("外观")
         theme_names = dict(THEMES)
@@ -1144,8 +1394,10 @@ class Floater:
                 workdays=[d for d in range(7) if day_on[d]],
                 alpha=float(alpha.get()),
                 theme=theme,
+                city=next(cid for n, cid in CITIES if n == city_var.get()),
             )
             save_conf(c)
+            WX_CITY[0] = c["city"]
             self.cheer_state = None
             win.destroy()
             if theme_changed:

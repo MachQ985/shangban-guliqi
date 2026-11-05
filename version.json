@@ -1,6 +1,6 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "file": "上班鼓励器.pyw",
-  "sha256": "1e7894db2ebe3aa1de0987babad9bf3038b6a202629bbbb91368a013cc4ccd63",
-  "notes": "首次发布：实时汇率、汽油升数、明日油价、自动更新"
+  "sha256": "2076f3cc4ed1dc4fda2dd32fccf6925017a014acc9c8d19671d24897433fc3d5",
+  "notes": "新增天气：现在、下班时、明天；下雨提醒带伞；可选城市"
 }
