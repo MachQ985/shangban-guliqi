@@ -1,6 +1,6 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "file": "上班鼓励器.pyw",
-  "sha256": "b083e1c2c1900a9cafc6f41b3d014ad353b168565565d63759addf1daa956cc7",
-  "notes": "新增日出日落时间，提示下班时天黑没黑"
+  "sha256": "dacea581390c21450f0d4ed335b08b86431d1138c311e7a1f6e2e2719304927a",
+  "notes": "日出日落改成 Lucide 线条图标，去掉天黑提示"
 }

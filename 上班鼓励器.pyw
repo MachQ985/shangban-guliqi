@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.2.1"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.2.2"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -744,6 +744,34 @@ def win_dark_titlebar(win, dark):
         pass
 
 
+def sun_icon(parent, up, color, bg, scale=1.0):
+    """Lucide 日出 / 日落：24×24 网格等比缩放为 18px，单色圆头线条。"""
+    # Lucide sunrise / sunset — https://lucide.dev — ISC License, © Lucide Icons and Contributors.
+    import math
+    k = 18 / 24 * scale
+    cv = tk.Canvas(parent, width=round(24 * k), height=round(24 * k),
+                   bg=bg, highlightthickness=0, borderwidth=0)
+
+    def line(*coords):
+        cv.create_line(*(v * k for v in coords), fill=color, width=2 * k,
+                       capstyle="round", joinstyle="round")
+
+    line(12, 2, 12, 10)
+    line(4.93, 10.93, 6.34, 12.34)
+    line(2, 18, 4, 18)
+    line(20, 18, 22, 18)
+    line(19.07, 10.93, 17.66, 12.34)
+    line(22, 22, 2, 22)
+    line(8, 6, 12, 2 if up else 10, 16, 6)
+    # SVG M16 18a4 4 0 0 0-8 0；采样半圆以沿用线条的圆头（Tk arc 无 capstyle）。
+    arc = []
+    for i in range(25):
+        a = math.pi * i / 24
+        arc.extend((12 + 4 * math.cos(a), 18 - 4 * math.sin(a)))
+    line(*arc)
+    return cv
+
+
 def has_cjk(s):
     return any("一" <= ch <= "鿿" for ch in s)
 
@@ -889,7 +917,7 @@ class Floater:
         # 天气：现在 / 下班时（下班后换成今晚）/ 明天
         tk.Frame(self.frame, height=1, bg=p["hairline"]).pack(fill="x", pady=(12, 8))
         self.wx_rows = []
-        for _ in range(4):
+        for _ in range(3):
             fr = tk.Frame(self.frame, **S)
             fr.pack(fill="x", pady=(0, 3))
             k = tk.Label(fr, text="", fg=p["text3"], font=(FONT, 9), width=5, anchor="w", **S)
@@ -899,6 +927,17 @@ class Floater:
             r = tk.Label(fr, text="", fg=p["text3"], font=(FONT, 9), **S)
             r.pack(side="right", anchor="s")
             self.wx_rows.append((k, v, r))
+        # 日出日落：线条图标 + 时间
+        sun = tk.Frame(self.frame, **S)
+        sun.pack(fill="x", pady=(1, 0))
+        self.sun_icons, self.sun_labels = [], []
+        for i, up in enumerate((True, False)):
+            cv = sun_icon(sun, up, p["text2"], p["surface"], self.ui_scale())
+            cv.pack(side="left", padx=(0 if i == 0 else 18, 5))
+            lb = tk.Label(sun, text="", fg=p["text"], font=(NUM_FONT, 10), **S)
+            lb.pack(side="left")
+            self.sun_icons.append(cv)
+            self.sun_labels.append(lb)
 
         tk.Frame(self.frame, height=1, bg=p["hairline"]).pack(fill="x", pady=(9, 10))
         self.lbl_cheer = tk.Label(self.frame, text="", fg=p["text2"], font=(FONT, 9),
@@ -1114,12 +1153,26 @@ class Floater:
             self.cheer = self.cheer_bag.pop()
             self.lbl_cheer.configure(text=self.cheer)
 
+    def ui_scale(self):
+        """画布按 DPI 缩放（Tk 的字体会自动放大，画布坐标不会）。"""
+        try:
+            return float(self.root.tk.call("tk", "scaling")) / (96 / 72)
+        except Exception:
+            return 1.0
+
+    def show_sun(self, rise, sset):
+        for cv, lb, t in zip(self.sun_icons, self.sun_labels, (rise, sset)):
+            lb.configure(text=t or "")
+            for item in cv.find_all():
+                cv.itemconfigure(item, state="normal" if t else "hidden")
+
     def refresh_wx(self, c, st):
         """更新三行天气，返回要混进鼓励语的天气标签（rain / snow / cold / hot）。"""
         p, wx = self.p, LIVE.get("wx")
         rows = self.wx_rows
         if not wx or wx.get("city") != c.get("city", "on-143"):
-            texts = [("天气", "获取中…", ""), ("", "", ""), ("", "", ""), ("", "", "")]
+            texts = [("天气", "获取中…", ""), ("", "", ""), ("", "", "")]
+            self.show_sun(None, None)
             for (k, v, r), (a, b, d) in zip(rows, texts):
                 k.configure(text=a), v.configure(text=b, fg=p["text3"]), r.configure(text=d)
             return []
@@ -1164,16 +1217,12 @@ class Floater:
         texts.append(("明天", f"{icon(tm[2], now.replace(hour=12))} {span(tm[0], tm[1])} "
                               f"{wx_zh(tm[2])}" if tm else "—", "", False))
 
-        # 4. 日出日落（只用今天的数据），下班时天黑没黑
+        # 日出日落（只用今天的数据）
         rise, sset = wx.get("sunrise", ""), wx.get("sunset", "")
         if rise[:10] == sset[:10] == now.date().isoformat():
-            set_t = dt.datetime.fromisoformat(sset)
-            note = ""
-            if st in ("before", "work"):
-                note = "下班时天已黑" if set_t <= end else "下班时天还亮"
-            texts.append(("日出", f"{rise[11:]}　日落 {sset[11:]}", note, False))
+            self.show_sun(rise[11:], sset[11:])
         else:
-            texts.append(("", "", "", False))
+            self.show_sun(None, None)
 
         for (k, v, r), (a, b, d, alert) in zip(rows, texts):
             k.configure(text=a)
