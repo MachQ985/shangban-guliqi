@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.4.0"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.4.1"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -1578,8 +1578,34 @@ class Floater:
         S = dict(bg=p["surface"])
         G = dict(bg=p["ground"])
 
+        # 分页：顶部分段切换（收入 / 时间 / 其他），底部按钮固定
+        PAGES = ["收入", "时间", "其他"]
+        seg = tk.Frame(body, bg=p["track"], padx=2, pady=2)
+        seg.pack(pady=(6, 2))
+        holder = tk.Frame(body, **G)
+        holder.pack(fill="x")
+        pages = {n: tk.Frame(holder, **G) for n in PAGES}
+        seg_btns = {}
+        page = [pages["收入"]]  # group() 往这一页里放
+
+        def show_page(name):
+            for n, fr in pages.items():
+                fr.pack_forget()
+                on = n == name
+                seg_btns[n].configure(bg=p["surface"] if on else p["track"],
+                                      fg=p["text"] if on else p["text2"],
+                                      font=(FONT, 10, "bold" if on else "normal"))
+            pages[name].pack(fill="both", expand=True)
+
+        for n in PAGES:
+            b = tk.Label(seg, text=n, padx=22, pady=4, cursor="hand2")
+            b.pack(side="left", padx=1)
+            b.bind("<Button-1>", lambda _e, n=n: show_page(n))
+            seg_btns[n] = b
+
         def group(caption, hint=None):
             """一组设置 = 小标题 + 一块白色面板（行与行之间细线分隔）。"""
+            body = page[0]
             tk.Label(body, text=caption, fg=p["text3"], font=(FONT, 9), anchor="w",
                      **G).pack(fill="x", pady=(12, 5), padx=4)
             panel = tk.Frame(body, highlightthickness=1, highlightbackground=p["border"], **S)
@@ -1705,6 +1731,7 @@ class Floater:
         option(row(g, "金额显示"), tax_var, list(tax_names.values()), lambda _v: tax_hint())
 
         # 时间
+        page[0] = pages["时间"]
         g = group("时间", "时间格式 HH:MM，例如 08:30；午休时长从工资里扣掉")
         entries["start"] = entry(row(g, "上班时间"), c["start"])
         entries["end"] = entry(row(g, "下班时间"), c["end"])
@@ -1735,6 +1762,7 @@ class Floater:
             paint(d)
 
         # 天气
+        page[0] = pages["其他"]
         g = group("天气", "天气来自加拿大环境部")
         city_names = {cid: n for n, cid in CITIES}
         city_var = tk.StringVar(value=city_names.get(c.get("city", "on-143"), "多伦多"))
@@ -1766,6 +1794,7 @@ class Floater:
 
         def fail(msg, key=None):
             err.configure(text=msg)
+            show_page("收入" if key in ("hourly", "fx", "currency") else "时间")
             if key:
                 entries[key].focus_set()
                 entries[key].select_range(0, "end")
@@ -1845,6 +1874,13 @@ class Floater:
         win.protocol("WM_DELETE_WINDOW", cancel)
         win.bind("<Return>", lambda _e: save())
         win.bind("<Escape>", lambda _e: cancel())
+
+        # 三页按最高那页定高度，切换时窗口不跳
+        win.update_idletasks()
+        holder.configure(width=max(f.winfo_reqwidth() for f in pages.values()),
+                         height=max(f.winfo_reqheight() for f in pages.values()) + 4)
+        holder.pack_propagate(False)
+        show_page("收入")
 
     def run(self):
         self.root.mainloop()
