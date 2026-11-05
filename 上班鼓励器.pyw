@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.2.0"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.2.1"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -555,8 +555,14 @@ def fetch_wx(city):
     warns = [(w.get("description") or {}).get("en", "") if isinstance(w, dict) else str(w)
              for w in (p.get("warnings") or [])]
     now_c = (cc.get("condition") or {}).get("en") or (hourly[0]["c"] if hourly else "")
+    sun = {}
+    for key in ("sunrise", "sunset"):
+        v = ((p.get("riseSet") or {}).get(key) or {}).get("en")
+        if v:
+            t = dt.datetime.fromisoformat(v.replace("Z", "+00:00")).astimezone()
+            sun[key] = t.replace(tzinfo=None).isoformat(timespec="minutes")
     LIVE["wx"] = {"city": city, "now_t": val(cc.get("temperature")), "now_c": now_c,
-                  "hourly": hourly, "daily": daily, "warnings": [w for w in warns if w]}
+                  "hourly": hourly, "daily": daily, "warnings": [w for w in warns if w], **sun}
 
 
 def wx_at(when):
@@ -883,7 +889,7 @@ class Floater:
         # 天气：现在 / 下班时（下班后换成今晚）/ 明天
         tk.Frame(self.frame, height=1, bg=p["hairline"]).pack(fill="x", pady=(12, 8))
         self.wx_rows = []
-        for _ in range(3):
+        for _ in range(4):
             fr = tk.Frame(self.frame, **S)
             fr.pack(fill="x", pady=(0, 3))
             k = tk.Label(fr, text="", fg=p["text3"], font=(FONT, 9), width=5, anchor="w", **S)
@@ -1113,7 +1119,7 @@ class Floater:
         p, wx = self.p, LIVE.get("wx")
         rows = self.wx_rows
         if not wx or wx.get("city") != c.get("city", "on-143"):
-            texts = [("天气", "获取中…", ""), ("", "", ""), ("", "", "")]
+            texts = [("天气", "获取中…", ""), ("", "", ""), ("", "", ""), ("", "", "")]
             for (k, v, r), (a, b, d) in zip(rows, texts):
                 k.configure(text=a), v.configure(text=b, fg=p["text3"]), r.configure(text=d)
             return []
@@ -1157,6 +1163,17 @@ class Floater:
         tm = wx_day(1)
         texts.append(("明天", f"{icon(tm[2], now.replace(hour=12))} {span(tm[0], tm[1])} "
                               f"{wx_zh(tm[2])}" if tm else "—", "", False))
+
+        # 4. 日出日落（只用今天的数据），下班时天黑没黑
+        rise, sset = wx.get("sunrise", ""), wx.get("sunset", "")
+        if rise[:10] == sset[:10] == now.date().isoformat():
+            set_t = dt.datetime.fromisoformat(sset)
+            note = ""
+            if st in ("before", "work"):
+                note = "下班时天已黑" if set_t <= end else "下班时天还亮"
+            texts.append(("日出", f"{rise[11:]}　日落 {sset[11:]}", note, False))
+        else:
+            texts.append(("", "", "", False))
 
         for (k, v, r), (a, b, d, alert) in zip(rows, texts):
             k.configure(text=a)

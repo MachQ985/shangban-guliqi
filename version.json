@@ -1,6 +1,6 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.1",
   "file": "上班鼓励器.pyw",
-  "sha256": "2076f3cc4ed1dc4fda2dd32fccf6925017a014acc9c8d19671d24897433fc3d5",
-  "notes": "新增天气：现在、下班时、明天；下雨提醒带伞；可选城市"
+  "sha256": "b083e1c2c1900a9cafc6f41b3d014ad353b168565565d63759addf1daa956cc7",
+  "notes": "新增日出日落时间，提示下班时天黑没黑"
 }
