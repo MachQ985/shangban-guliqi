@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.3.1"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.4.0"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -44,8 +44,9 @@ DEFAULT = {
     "x": None,
     "y": None,
     "mini": False,
-    "theme": "auto",
-    "city": "on-143",  # 天气城市（加拿大环境部编号），默认多伦多  # auto 跟随系统 / light / dark
+    "theme": "auto",  # auto 跟随系统 / light / dark
+    "city": "on-143",  # 天气城市（加拿大环境部编号），默认多伦多
+    "tax_mode": "net",  # net 税后（估算）/ gross 税前 / cash 现金（不预扣）
 }
 
 # ---------- 外观（苹果风：冷白 / 深灰底，黑白灰分层，颜色只给钱、倒计时和进度） ----------
@@ -350,6 +351,107 @@ def display_code(conf):
         if approx and s == sym and 0.7 < fx / approx < 1.4:
             return c
     return "custom"
+
+
+# ---------- 税后估算：2026 年安省员工（联邦税 + 安省税 + 健康保费 + CPP + EI） ----------
+# 数字来源：CRA / 安省 2026 年公布的税率与分档（查于 2026-11），每年 1 月要更新一次
+TAX_YEAR = 2026
+FED_BRACKETS = [(58523, .14), (117045, .205), (181440, .26), (258482, .29), (None, .33)]
+FED_BPA_MAX, FED_BPA_MIN = 16452, 14829       # 基本免税额：收入 181,440–258,482 之间逐步减少
+FED_EMPLOYMENT_AMOUNT = 1501                  # 加拿大就业抵免额（2025 年 1,471 按 2% 指数化）
+ON_BRACKETS = [(53891, .0505), (107785, .0915), (150000, .1116), (220000, .1216), (None, .1316)]
+ON_BPA = 12989
+ON_SURTAX = [(5818, .20), (7446, .36)]        # 按"安省基本税额"超过这两档的部分加收
+ON_TAX_REDUCTION = 300                        # 安省低收入减税基本额（估值）
+CPP_RATE, CPP_EXEMPT, CPP_YMPE = .0595, 3500, 74600
+CPP2_RATE, CPP_YAMPE = .04, 85000
+EI_RATE, EI_MAX_INSURABLE = .0163, 68900
+
+
+def _bracket_tax(income, brackets):
+    tax, lower = 0.0, 0
+    for upper, rate in brackets:
+        if upper is None or income <= upper:
+            return tax + (income - lower) * rate
+        tax += (upper - lower) * rate
+        lower = upper
+    return tax
+
+
+def _ohp(income):
+    """安省健康保费（Ontario Health Premium）。"""
+    if income <= 20000:
+        return 0.0
+    if income <= 36000:
+        return min(300, .06 * (income - 20000))
+    if income <= 48000:
+        return 300 + min(150, .06 * (income - 36000))
+    if income <= 72000:
+        return 450 + min(150, .25 * (income - 48000))
+    if income <= 200000:
+        return 600 + min(150, .25 * (income - 72000))
+    return 750 + min(150, .25 * (income - 200000))
+
+
+def annual_deductions(gross):
+    """年收入 gross（全部是工资）→ 各项扣除（年）。只是估算：不算 RRSP、其他抵免和退税。"""
+    cpp_base = max(0.0, min(gross, CPP_YMPE) - CPP_EXEMPT)
+    cpp1 = cpp_base * CPP_RATE
+    cpp2 = max(0.0, min(gross, CPP_YAMPE) - CPP_YMPE) * CPP2_RATE
+    ei = min(gross, EI_MAX_INSURABLE) * EI_RATE
+    # 增强部分的 CPP（5.95% 里的 1% + CPP2）从收入里扣除，基础部分（4.95%）算税收抵免
+    cpp_enhanced = cpp_base * .01 + cpp2
+    cpp_credit_base = cpp_base * .0495
+    taxable = max(0.0, gross - cpp_enhanced)
+
+    # 联邦
+    if taxable <= FED_BRACKETS[2][0]:
+        bpa = FED_BPA_MAX
+    elif taxable >= FED_BRACKETS[3][0]:
+        bpa = FED_BPA_MIN
+    else:
+        lo, hi = FED_BRACKETS[2][0], FED_BRACKETS[3][0]
+        bpa = FED_BPA_MAX - (FED_BPA_MAX - FED_BPA_MIN) * (taxable - lo) / (hi - lo)
+    fed_credits = (bpa + min(FED_EMPLOYMENT_AMOUNT, gross) + cpp_credit_base + ei) * FED_BRACKETS[0][1]
+    fed = max(0.0, _bracket_tax(taxable, FED_BRACKETS) - fed_credits)
+
+    # 安省
+    on_basic = max(0.0, _bracket_tax(taxable, ON_BRACKETS)
+                   - (ON_BPA + cpp_credit_base + ei) * ON_BRACKETS[0][1])
+    surtax = sum(max(0.0, on_basic - t) * r for t, r in ON_SURTAX)
+    on = on_basic + surtax
+    on = max(0.0, on - max(0.0, 2 * ON_TAX_REDUCTION - on))  # 低收入减税
+    ohp = _ohp(taxable)
+
+    total = fed + on + ohp + cpp1 + cpp2 + ei
+    return {"gross": gross, "fed": fed, "on": on, "ohp": ohp, "cpp": cpp1 + cpp2, "ei": ei,
+            "total": total, "rate": total / gross if gross else 0.0}
+
+
+def annual_gross(conf):
+    """按时薪 × 每天带薪小时 × 每周工作日 × 52 周估年收入。"""
+    s, e = parse_hm(conf["start"]), parse_hm(conf["end"])
+    paid_h = ((e.hour * 60 + e.minute) - (s.hour * 60 + s.minute)
+              - float(conf.get("lunch_min", 0) or 0)) / 60
+    return float(conf["hourly"]) * max(0.0, paid_h) * len(conf.get("workdays", [])) * 52
+
+
+TAX_MODES = [("net", "税后（估算）"), ("gross", "税前"), ("cash", "现金（不预扣）")]
+
+
+def tax_mode(conf):
+    """老配置只有 after_tax：True → 税后，False → 税前。"""
+    m = conf.get("tax_mode")
+    if m in dict(TAX_MODES):
+        return m
+    return "net" if conf.get("after_tax", True) else "gross"
+
+
+def net_factor(conf):
+    """税后 / 税前 的比例；设置里选了按税前显示就是 1。"""
+    if tax_mode(conf) != "net" or float(conf.get("hourly", 0) or 0) <= 0:
+        return 1.0
+    return 1 - annual_deductions(annual_gross(conf))["rate"]
 
 
 def fmt_rate(r):
@@ -943,7 +1045,8 @@ class Floater:
 
         head = tk.Frame(self.frame, **S)
         head.pack(fill="x")
-        tk.Label(head, text="今天已赚", fg=p["text3"], font=(FONT, 9), **S).pack(side="left")
+        self.lbl_title = tk.Label(head, text="今天已赚", fg=p["text3"], font=(FONT, 9), **S)
+        self.lbl_title.pack(side="left")
         self.lbl_state = tk.Label(head, text="", fg=p["text3"], font=(FONT, 9), **S)
         self.lbl_state.pack(side="right")
         self.dot = tk.Canvas(head, width=8, height=8, highlightthickness=0, **S)
@@ -951,12 +1054,15 @@ class Floater:
         self.dot_id = self.dot.create_oval(1, 1, 7, 7, fill=p["text3"], outline="")
 
         money = tk.Frame(self.frame, **S)
-        money.pack(fill="x", pady=(2, 8))
+        money.pack(fill="x", pady=(2, 0))
         self.lbl_money = tk.Label(money, text="", fg=p["gold"],
                                   font=(NUM_FONT, 26, "bold"), **S)
         self.lbl_money.pack(side="left")
         self.lbl_unit = tk.Label(money, text="", fg=p["gold"], font=(FONT, 14, "bold"), **S)
         self.lbl_unit.pack(side="left", anchor="s", pady=(0, 6), padx=(4, 0))
+        self.lbl_tax = tk.Label(self.frame, text="", fg=p["text3"], font=(FONT, 9),
+                                anchor="w", **S)
+        self.lbl_tax.pack(fill="x", pady=(0, 8))
 
         # 进度条：圆头细线，底轨浅灰
         self.bar = tk.Canvas(self.frame, width=1, height=6, highlightthickness=0, **S)
@@ -1169,6 +1275,18 @@ class Floater:
         c, p = self.conf, self.p
         r = compute(c, dt.datetime.now())
         st, prog = r["state"], r["progress"]
+        # 税后：按 2026 年安省税率估出的平均扣除比例
+        nf = net_factor(c)
+        gross_earned = r["earned"]
+        r["earned"] *= nf
+        r["total"] *= nf
+        if nf < 1:
+            self.lbl_title.configure(text="今天已赚（税后）")
+            self.lbl_tax.configure(text=f"税前 {fmt_money(c, gross_earned)} · 扣除约 {(1 - nf) * 100:.1f}%")
+        else:
+            self.lbl_title.configure(text={"gross": "今天已赚（税前）", "cash": "今天已赚（现金）"}.get(
+                tax_mode(c), "今天已赚"))
+            self.lbl_tax.configure(text="")
 
         # 完整模式
         num, unit = split_unit(fmt_money(c, r["earned"]))
@@ -1547,12 +1665,44 @@ class Floater:
                 custom["fx"], custom["currency"] = entries["fx"].get(), entries["currency"].get()
 
         option(row(g, "显示成"), display_var, [d[1] for d in DISPLAYS], pick_display)
+        income_group = g
         entries["fx"] = entry(row(g, "汇率"), "")
         entries["currency"] = entry(row(g, "货币符号"), "")
         for key in ("fx", "currency"):
             entries[key].configure(readonlybackground=p["surface"])
             entries[key].bind("<KeyRelease>", remember_custom)
         pick_display(display_var.get())
+
+        # 税：默认按税后显示（2026 年安省税率估算）
+        g = group("税", "")
+        tax_names = dict(TAX_MODES)
+        tax_var = tk.StringVar(value=tax_names[tax_mode(c)])
+        tax_group = g
+
+        def tax_hint(_e=None):
+            mode = next(k for k, n in TAX_MODES if n == tax_var.get())
+            if mode == "cash":
+                tax_group.hint.configure(text="现金工资发的时候没有预先扣税，所以按全额显示。"
+                                              "但现金收入仍然是应税收入，每年报税时要申报")
+                return
+            if mode == "gross":
+                tax_group.hint.configure(text="按税前全额显示，不扣税")
+                return
+            try:
+                tmp = dict(c, hourly=float(entries["hourly"].get().replace(",", "")),
+                           start=entries["start"].get(), end=entries["end"].get(),
+                           lunch_min=float(entries["lunch_min"].get() or 0),
+                           workdays=[d for d in range(7) if day_on[d]])
+                gross = annual_gross(tmp)
+                d = annual_deductions(gross)
+                txt = (f"按 {TAX_YEAR} 年安省税率估算：年收入约 ${gross:,.0f}，"
+                       f"扣联邦税、安省税、健康保费、CPP、EI 约 {d['rate'] * 100:.1f}%，"
+                       f"到手约 ${gross - d['total']:,.0f}。不算 RRSP、其他抵免和退税")
+            except Exception:
+                txt = f"按 {TAX_YEAR} 年安省税率估算；填好时薪和上下班时间后显示估算结果"
+            tax_group.hint.configure(text=txt)
+
+        option(row(g, "金额显示"), tax_var, list(tax_names.values()), lambda _v: tax_hint())
 
         # 时间
         g = group("时间", "时间格式 HH:MM，例如 08:30；午休时长从工资里扣掉")
@@ -1575,6 +1725,7 @@ class Floater:
         def flip(d):
             day_on[d] = not day_on[d]
             paint(d)
+            tax_hint()
 
         for d, name in enumerate("一二三四五六日"):
             ch = tk.Label(fr, text=name, font=(FONT, 10), width=3, pady=4, cursor="hand2")
@@ -1588,6 +1739,11 @@ class Floater:
         city_names = {cid: n for n, cid in CITIES}
         city_var = tk.StringVar(value=city_names.get(c.get("city", "on-143"), "多伦多"))
         option(row(g, "城市"), city_var, [n for n, _ in CITIES])
+
+        # 时薪、时间改了就重新估算税
+        for key in ("hourly", "start", "end", "lunch_min"):
+            entries[key].bind("<KeyRelease>", tax_hint, add="+")
+        tax_hint()
 
         # 外观
         g = group("外观")
@@ -1661,6 +1817,7 @@ class Floater:
             c.update(
                 hourly=hourly,
                 display=display, fx=fx, currency=currency,
+                tax_mode=next(k for k, n in TAX_MODES if n == tax_var.get()),
                 start=s.strftime("%H:%M"), end=e.strftime("%H:%M"),
                 lunch_min=int(lunch_min) if lunch_min.is_integer() else lunch_min,
                 workdays=[d for d in range(7) if day_on[d]],
