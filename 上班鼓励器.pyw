@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.4.1"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.5.0"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -46,6 +46,8 @@ DEFAULT = {
     "mini": False,
     "theme": "auto",  # auto 跟随系统 / light / dark
     "city": "on-143",  # 天气城市（加拿大环境部编号），默认多伦多
+    "pet_on": True,   # 显示桌宠（导入素材后才会出现）
+    "pet_zoom": 2,    # 桌宠放大倍数
     "tax_mode": "net",  # net 税后（估算）/ gross 税前 / cash 现金（不预扣）
 }
 
@@ -897,6 +899,588 @@ def set_autostart(on):
             f.write(f'CreateObject("WScript.Shell").Run """{pyw}"" ""{script}""", 0\r\n')
 
 
+# ---------- 桌宠：素材处理（只用 Tk，不依赖 PIL） ----------
+PET_STATES = ["idle", "eat", "play", "sleep", "happy", "click", "hungry", "work",
+              "rain", "snow", "cold", "hot", "sunny"]
+PET_STATE_NAMES = {"idle": "平时", "eat": "吃饭", "play": "玩耍", "sleep": "睡觉", "happy": "开心",
+                   "click": "被戳", "hungry": "饿了", "work": "上班", "rain": "下雨", "snow": "下雪",
+                   "cold": "寒冷", "hot": "炎热", "sunny": "晴天"}
+PET_ICONS = ["snack", "freeze_dried", "can", "wand"]
+PET_DIR = os.path.join(CONF_DIR, "pet")
+PET_SIZE, PET_GROUND, PET_ICON = 64, 56, 32   # 帧 64×64，脚底在第 56 行；图标 32×32
+PET_CAT_HEIGHT = 46                           # 自动处理时，平时坐姿缩放到大约这么高
+PET_KEY = "#ff00fe"                           # 读图时用这个颜色标记透明像素
+PET_FPS_MS = 250
+
+
+def _pet_scan(src):
+    """按文件名认动作：idle_1.png / idle.png / IDLE-2.PNG 都行。返回 ({动作: [文件…]}, {图标: 文件}, 跳过的文件)。"""
+    import re
+    frames, icons, skipped = {}, {}, []
+    pat = re.compile(r"^([a-z_]+?)(?:[_-]?(\d+))?\.(png|gif)$", re.I)
+    for name in sorted(os.listdir(src)):
+        path = os.path.join(src, name)
+        if not os.path.isfile(path):
+            continue
+        m = pat.match(name)
+        base = m.group(1).lower() if m else ""
+        if m and base in PET_STATES:
+            frames.setdefault(base, []).append((int(m.group(2) or 0), path))
+        elif m and base in PET_ICONS:
+            icons[base] = path
+        elif name.lower().endswith((".png", ".gif", ".jpg", ".jpeg", ".webp")):
+            why = "JPG / WEBP 读不了，请导出成 PNG" if not name.lower().endswith((".png", ".gif")) \
+                else "文件名认不出是哪个动作"
+            skipped.append(f"{name}（{why}）")
+    return ({k: [p for _, p in sorted(v)] for k, v in frames.items()}, icons, skipped)
+
+
+def _pet_read(path, limit=256):
+    """读一张图 → (像素网格[行][列]=颜色或 None, 缩小倍数)。大图先整数缩小到 limit 以内。"""
+    import math
+    img = tk.PhotoImage(file=path)
+    w, h = img.width(), img.height()
+    k = max(1, math.ceil(max(w, h) / limit))
+    if k > 1:
+        small = tk.PhotoImage()
+        small.tk.call(small, "copy", img, "-subsample", k, k)
+        img = small
+    rows = img.tk.splitlist(img.tk.call(img, "data", "-background", PET_KEY))
+    grid = [[None if c == PET_KEY else c for c in img.tk.splitlist(r)] for r in rows]
+    return grid, k
+
+
+def _rgb(c):
+    return int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16)
+
+
+def _pet_key_background(grid):
+    """没有透明背景的图：从四条边往里“漫水”，把和边缘颜色接近、连成一片的背景抠掉。
+    只抠和边缘连着的部分，猫身上的白毛不会被误抠。"""
+    h, w = len(grid), len(grid[0])
+    border = [grid[y][x] for y in (0, h - 1) for x in range(w)] + \
+             [grid[y][x] for x in (0, w - 1) for y in range(h)]
+    if any(c is None for c in border):
+        return grid  # 本来就是透明背景
+    from collections import Counter, deque
+    key = _rgb(Counter(border).most_common(1)[0][0])
+    greenish = key[1] > key[0] + 60 and key[1] > key[2] + 60
+    tol = 110 if greenish else 60
+
+    def is_bg(c):
+        r, g, b = _rgb(c)
+        if greenish and g > r + 40 and g > b + 40:  # 绿幕边缘的绿色溢色
+            return True
+        return (r - key[0]) ** 2 + (g - key[1]) ** 2 + (b - key[2]) ** 2 < tol * tol
+
+    seen = [[False] * w for _ in range(h)]
+    q = deque([(x, y) for y in (0, h - 1) for x in range(w)] +
+              [(x, y) for x in (0, w - 1) for y in range(h)])
+    while q:
+        x, y = q.popleft()
+        if seen[y][x] or grid[y][x] is None or not is_bg(grid[y][x]):
+            continue
+        seen[y][x] = True
+        grid[y][x] = None
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if 0 <= nx < w and 0 <= ny < h and not seen[ny][nx]:
+                q.append((nx, ny))
+    if greenish:
+        # 绿幕：被身体围住的绿色（尾巴圈里、伞柄和身体之间）跟边缘不连通，也要抠掉。
+        # 猫本身不会是这种亮绿色，所以全图抠；白底不这样做，免得把白毛抠掉
+        for row in grid:
+            for x, c in enumerate(row):
+                if c is not None and is_bg(c):
+                    row[x] = None
+    return grid
+
+
+def _pet_bbox(grid):
+    ys = [y for y, row in enumerate(grid) if any(c is not None for c in row)]
+    xs = [x for x in range(len(grid[0])) if any(row[x] is not None for row in grid)]
+    return (min(xs), min(ys), max(xs), max(ys)) if xs and ys else None
+
+
+def _pet_resample(grid, k, scale, cx, cy, size, ox, oy):
+    """把源图（源像素坐标）缩放 scale 倍，源上的点 (cx, cy) 对到输出的 (ox, oy)。
+    每个输出像素在源图对应的小方块里取几个点“投票”：多数透明就透明，否则取最常见的颜色。"""
+    from collections import Counter
+    out = [[None] * size for _ in range(size)]
+    h, w = len(grid), len(grid[0])
+    step = 1 / scale                       # 一个输出像素对应多少源像素
+    n = max(1, min(4, int(step / k)))      # 每边取几个采样点
+    for Y in range(size):
+        for X in range(size):
+            votes = []
+            for j in range(n):
+                for i in range(n):
+                    sx = (X + (i + .5) / n - ox) * step + cx
+                    sy = (Y + (j + .5) / n - oy) * step + cy
+                    gx, gy = int(sx // k), int(sy // k)
+                    votes.append(grid[gy][gx] if 0 <= gx < w and 0 <= gy < h else None)
+            solid = [v for v in votes if v is not None]
+            if len(solid) * 2 > len(votes):
+                out[Y][X] = Counter(solid).most_common(1)[0][0]
+    return out
+
+
+def _pet_quantize(grids, k=16):
+    """整套素材统一减到 k 种颜色（像素风的调色板），简单的 k-means。"""
+    import random as _r
+    pix = [_rgb(c) for g in grids for row in g for c in row if c is not None]
+    uniq = list(set(pix))
+    if len(uniq) <= k:
+        return grids
+    rnd = _r.Random(1)
+    sample = rnd.sample(pix, min(len(pix), 6000))
+    cents = rnd.sample(uniq, k)
+    for _ in range(10):
+        buckets = [[] for _ in cents]
+        for p in sample:
+            i = min(range(len(cents)), key=lambda j: sum((a - b) ** 2 for a, b in zip(p, cents[j])))
+            buckets[i].append(p)
+        cents = [tuple(sum(c) // len(b) for c in zip(*b)) if b else cents[i]
+                 for i, b in enumerate(buckets)]
+    cache = {}
+
+    def near(c):
+        if c not in cache:
+            p = _rgb(c)
+            best = min(cents, key=lambda q: sum((a - b) ** 2 for a, b in zip(p, q)))
+            cache[c] = "#%02x%02x%02x" % best
+        return cache[c]
+    return [[[near(c) if c is not None else None for c in row] for row in g] for g in grids]
+
+
+def _pet_write(grid, path):
+    size = len(grid)
+    img = tk.PhotoImage(width=size, height=size)  # 新建的图默认全透明
+    for y, row in enumerate(grid):
+        x = 0
+        while x < size:  # 连续的不透明像素一次写进去
+            if row[x] is None:
+                x += 1
+                continue
+            x0 = x
+            while x < size and row[x] is not None:
+                x += 1
+            img.put("{" + " ".join(row[x0:x]) + "}", to=(x0, y))
+    img.write(path, format="png")
+
+
+def import_pet_assets(src, progress=None):
+    """把一个文件夹里的素材处理成标准桌宠素材，放进 PET_DIR。返回报告 dict。
+
+    - 已经是标准规格（64×64、透明背景）的直接复制；
+    - 其他任意大小的 PNG：自动去背景（透明 / 纯色背景都行）、按“平时”那张统一缩放成
+      64×64 像素风、脚底对齐到第 56 行、水平居中，全套减到 16 色。
+    """
+    import shutil
+    import tempfile
+    frames, icons, skipped = _pet_scan(src)
+    if "idle" not in frames:
+        return {"ok": False, "error": "没找到“平时”的图（idle.png 或 idle_1.png），这张是必需的",
+                "skipped": skipped}
+    sizes = {}
+    for p in [p for v in frames.values() for p in v] + list(icons.values()):
+        im = tk.PhotoImage(file=p)
+        sizes[p] = (im.width(), im.height())
+
+    def is_std(p, s):
+        if sizes[p] != (s, s):
+            return False
+        g, _ = _pet_read(p)
+        return any(c is None for row in g for c in row)
+
+    tmp = tempfile.mkdtemp(prefix="pet_")
+    sprite_files = [p for v in frames.values() for p in v]
+    std = all(is_std(p, PET_SIZE) for p in sprite_files)
+    out_frames = {}
+    if std:  # 已经是标准规格：原样复制
+        for st, paths in frames.items():
+            out_frames[st] = []
+            for i, p in enumerate(paths, 1):
+                name = f"{st}_{i}.png"
+                shutil.copy(p, os.path.join(tmp, name))
+                out_frames[st].append(name)
+    else:
+        read = {}
+        for n, p in enumerate(sprite_files, 1):
+            g, k = _pet_read(p)
+            read[p] = (_pet_key_background(g), k)
+            if progress:
+                progress(f"读取素材 {n}/{len(sprite_files)}…")
+        g0, k0 = read[frames["idle"][0]]
+        bb = _pet_bbox(g0)
+        if not bb:
+            return {"ok": False, "error": "“平时”那张图是空的，或者背景没能去掉"}
+        # 按“平时”那张算缩放和位置，整套共用，动作之间不跳
+        scale = PET_CAT_HEIGHT / ((bb[3] - bb[1] + 1) * k0)
+        cx = (bb[0] + bb[2] + 1) / 2 * k0
+        bottom = (bb[3] + 1) * k0
+        grids, names = [], []
+        for n, (st, paths) in enumerate(frames.items(), 1):
+            for i, p in enumerate(paths, 1):
+                g, k = read[p]
+                grids.append(_pet_resample(g, k, scale, cx, bottom, PET_SIZE,
+                                           PET_SIZE / 2, PET_GROUND + 1))
+                names.append((st, f"{st}_{i}.png"))
+            if progress:
+                progress(f"缩成像素风 {n}/{len(frames)}…")
+        if progress:
+            progress("统一调色板…")
+        grids = _pet_quantize(grids)
+        for (st, name), g in zip(names, grids):
+            _pet_write(g, os.path.join(tmp, name))
+            out_frames.setdefault(st, []).append(name)
+
+    out_icons = {}
+    for ic, p in icons.items():
+        name = f"{ic}.png"
+        if is_std(p, PET_ICON):
+            shutil.copy(p, os.path.join(tmp, name))
+        else:
+            g, k = _pet_read(p)
+            g = _pet_key_background(g)
+            bb = _pet_bbox(g)
+            if not bb:
+                continue
+            s = (PET_ICON - 4) / ((max(bb[2] - bb[0], bb[3] - bb[1]) + 1) * k)
+            g = _pet_resample(g, k, s, (bb[0] + bb[2] + 1) / 2 * k, (bb[1] + bb[3] + 1) / 2 * k,
+                              PET_ICON, PET_ICON / 2, PET_ICON / 2)
+            _pet_write(_pet_quantize([g])[0], os.path.join(tmp, name))
+        out_icons[ic] = name
+
+    name = os.path.basename(os.path.normpath(src))
+    try:  # 素材自带清单（比如 Codex 做的）里写了名字就用它
+        with open(os.path.join(src, "manifest.json"), encoding="utf-8") as f:
+            name = json.load(f).get("name") or name
+    except (OSError, ValueError):
+        pass
+    with open(os.path.join(tmp, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump({"name": name, "states": out_frames, "icons": out_icons,
+                   "ground_y": PET_GROUND, "frame_duration_ms": PET_FPS_MS,
+                   "processed": not std}, f, ensure_ascii=False, indent=2)
+    if os.path.isdir(PET_DIR):
+        shutil.rmtree(PET_DIR)
+    os.makedirs(os.path.dirname(PET_DIR), exist_ok=True)
+    shutil.move(tmp, PET_DIR)
+    return {"ok": True, "name": name, "states": {k: len(v) for k, v in out_frames.items()},
+            "icons": list(out_icons), "missing": [s for s in PET_STATES if s not in out_frames],
+            "skipped": skipped, "processed": not std}
+
+
+# ---------- 桌宠：喂养规则 ----------
+# (编号, 名字, 每上班多少秒得一个（None = 上满一天得一个）, 加饱腹, 加心情)
+PET_FOODS = [("snack", "零食", 30 * 60, 5, 5),
+             ("freeze_dried", "冻干", 2 * 3600, 15, 10),
+             ("can", "罐头", None, 40, 15)]
+PET_WAND_COOLDOWN = 30 * 60
+PET_WAND_MOOD = 20
+PET_DECAY = {"full": 4, "mood": 3}  # 每小时掉多少
+
+
+class Pet:
+    """趴在悬浮窗顶上的小猫：透明小窗跟着悬浮窗走，按状态播放素材动画。"""
+
+    def __init__(self, app):
+        self.app = app
+        self.win = self.cv = self.img_id = self.panel = None
+        self.frames, self.icons, self.manifest = {}, {}, {}
+        self.state, self.idx, self.st = "idle", 0, "work"
+        self.transient = []          # [(动作, 结束时间), …] 吃 / 玩 / 被戳之后依次播放
+        self.ambient, self.ambient_until = "idle", 0
+        self.last_save = 0
+        self.data = self.app.conf.setdefault("pet", {})
+        self.data.setdefault("full", 80.0)
+        self.data.setdefault("mood", 80.0)
+        self.data.setdefault("inv", {"snack": 0, "freeze_dried": 0, "can": 0})
+        self.data.setdefault("love", 0)
+        self.reload()
+        self.animate()
+
+    # ----- 素材 -----
+    def zoom(self):
+        return int(self.app.conf.get("pet_zoom", 2))
+
+    def reload(self):
+        """（重新）读取素材并建窗口；没导入素材或关掉了宠物就不显示。"""
+        self.frames, self.icons, self.manifest = {}, {}, {}
+        if self.win is not None:
+            self.win.destroy()
+            self.win = None
+        path = os.path.join(PET_DIR, "manifest.json")
+        if not self.app.conf.get("pet_on", True) or not os.path.exists(path):
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                self.manifest = json.load(f)
+            z = self.zoom()
+            for st, names in self.manifest.get("states", {}).items():
+                self.frames[st] = [tk.PhotoImage(file=os.path.join(PET_DIR, n)).zoom(z) for n in names]
+            for ic, n in self.manifest.get("icons", {}).items():
+                self.icons[ic] = tk.PhotoImage(file=os.path.join(PET_DIR, n))
+        except Exception:
+            self.frames = {}
+            return
+        if "idle" not in self.frames:
+            return
+        s = PET_SIZE * self.zoom()
+        self.win = tk.Toplevel(self.app.root)
+        self.win.overrideredirect(True)
+        self.win.attributes("-topmost", True)
+        bg = PET_KEY
+        if IS_MAC:
+            try:
+                self.win.attributes("-transparent", True)
+                bg = "systemTransparent"
+            except tk.TclError:
+                pass
+        else:
+            self.win.attributes("-transparentcolor", PET_KEY)
+        self.win.configure(bg=bg)
+        self.cv = tk.Canvas(self.win, width=s, height=s, bg=bg, highlightthickness=0, bd=0,
+                            cursor="hand2")
+        self.cv.pack()
+        self.img_id = self.cv.create_image(0, 0, anchor="nw", image=self.frames["idle"][0])
+        self.cv.bind("<ButtonPress-1>", self.on_press)
+        self.cv.bind("<B1-Motion>", self.app.drag_move)
+        self.cv.bind("<ButtonRelease-1>", self.on_release)
+        self.cv.bind("<Double-Button-1>", lambda _e: "break")
+        for seq in ("<Button-3>",) + (("<Button-2>", "<Control-Button-1>") if IS_MAC else ()):
+            self.cv.bind(seq, lambda _e: self.open_panel())
+        self.follow()
+
+    def follow(self):
+        """猫的脚踩在悬浮窗上边缘，靠右。"""
+        if self.win is None:
+            return
+        r, z = self.app.root, self.zoom()
+        s = PET_SIZE * z
+        x = r.winfo_x() + r.winfo_width() - s - 14
+        y = r.winfo_y() - (PET_GROUND + 1) * z + 3 * z
+        self.win.geometry(f"{s}x{s}+{x}+{max(0, y)}")
+        self.win.lift()
+
+    # ----- 状态 -----
+    def decay(self):
+        import time
+        now = time.time()
+        hours = max(0.0, (now - self.data.get("ts", now)) / 3600)
+        for k, per_h in PET_DECAY.items():
+            self.data[k] = max(0.0, self.data[k] - per_h * hours)
+        self.data["ts"] = now
+
+    def earn(self, r, st, conf):
+        """按今天已上班的时长发吃的（和算钱用的是同一套时间）。返回新得到的东西列表。"""
+        today = dt.date.today().isoformat()
+        if self.data.get("day") != today:
+            self.data["day"], self.data["got"] = today, {"snack": 0, "freeze_dried": 0, "can": 0}
+        if st == "off":
+            return []
+        s, e = parse_hm(conf["start"]), parse_hm(conf["end"])
+        span = (e.hour * 3600 + e.minute * 60) - (s.hour * 3600 + s.minute * 60)
+        worked = r["progress"] * span
+        got, inv, new = self.data["got"], self.data["inv"], []
+        for key, name, every, _, _ in PET_FOODS:
+            due = (1 if st == "after" else 0) if every is None else int(worked // every)
+            if due > got.get(key, 0):
+                n = due - got.get(key, 0)
+                inv[key] = inv.get(key, 0) + n
+                got[key] = due
+                new.append(f"{name} ×{n}")
+        return new
+
+    def update(self, r, st, conf):
+        """悬浮窗每次刷新时调用：衰减、发吃的、定时存盘。"""
+        import time
+        self.st = st
+        self.decay()
+        new = self.earn(r, st, conf)
+        if new:
+            if self.win is not None:
+                self.app.flash(f"上班奖励：{'、'.join(new)}，右键小猫去喂它")
+            self.save()
+        elif time.time() - self.last_save > 60:
+            self.save()
+
+    def save(self):
+        import time
+        self.last_save = time.time()
+        save_conf(self.app.conf)
+
+    def pick_state(self):
+        import time
+        now = time.time()
+        while self.transient and self.transient[0][1] <= now:
+            self.transient.pop(0)
+        if self.transient:
+            return self.transient[0][0]
+        if self.data["full"] < 25:
+            return "hungry"
+        hour = dt.datetime.now().hour
+        if self.st in ("after", "off") or hour >= 22 or hour < 6:
+            return "sleep"
+        if now >= self.ambient_until:  # 每 20 秒换一个“平常状态”：天气 / 上班 / 平时
+            wx = LIVE.get("wx") or {}
+            kind, t = wx_kind(wx.get("now_c", "")), wx.get("now_t")
+            weather = "snow" if kind == "snow" else "rain" if kind in ("rain", "mix", "thunder") \
+                else "cold" if t is not None and t <= 0 else "hot" if t is not None and t >= 28 \
+                else "sunny" if kind == "sun" and 8 <= hour < 18 else None
+            pool = ["idle", "idle"] + (["work", "work"] if self.st == "work" else []) + \
+                   ([weather] * 3 if weather else [])
+            self.ambient, self.ambient_until = random.choice(pool), now + 20
+        return self.ambient
+
+    def play(self, *seq):
+        """插播一串动作：play("eat", 3, "happy", 2)。"""
+        import time
+        t, self.transient = time.time(), []
+        for st, secs in zip(seq[::2], seq[1::2]):
+            t += secs
+            self.transient.append((st, t))
+        self.idx = 0
+
+    def animate(self):
+        if self.win is not None and self.frames:
+            st = self.pick_state()
+            if st not in self.frames:
+                st = "happy" if st == "click" and "happy" in self.frames else "idle"
+            if st != self.state:
+                self.state, self.idx = st, 0
+            fr = self.frames[st]
+            self.cv.itemconfigure(self.img_id, image=fr[self.idx % len(fr)])
+            self.idx += 1
+        self.app.root.after(int(self.manifest.get("frame_duration_ms", PET_FPS_MS)), self.animate)
+
+    # ----- 互动 -----
+    def on_press(self, e):
+        self._press = (e.x_root, e.y_root)
+        self.app.drag_start(e)
+
+    def on_release(self, e):
+        px, py = getattr(self, "_press", (e.x_root, e.y_root))
+        if abs(e.x_root - px) > 4 or abs(e.y_root - py) > 4:
+            self.app.drag_end(e)  # 拖着猫也能挪悬浮窗
+            return
+        self.data["mood"] = min(100.0, self.data["mood"] + 1)
+        self.play("click", .7, "happy", 1.5)
+
+    def feed(self, key):
+        food = next(f for f in PET_FOODS if f[0] == key)
+        inv = self.data["inv"]
+        if inv.get(key, 0) <= 0:
+            return
+        inv[key] -= 1
+        self.data["full"] = min(100.0, self.data["full"] + food[3])
+        self.data["mood"] = min(100.0, self.data["mood"] + food[4])
+        self.data["love"] += 1
+        self.play("eat", 3, "happy", 2)
+        self.save()
+
+    def wand_left(self):
+        import time
+        return max(0, int(self.data.get("wand_at", 0) + PET_WAND_COOLDOWN - time.time()))
+
+    def wand(self):
+        import time
+        if self.wand_left():
+            return
+        self.data["wand_at"] = time.time()
+        self.data["mood"] = min(100.0, self.data["mood"] + PET_WAND_MOOD)
+        self.data["love"] += 1
+        self.play("play", 4, "happy", 2)
+        self.save()
+
+    # ----- 喂养面板 -----
+    def open_panel(self):
+        if self.panel is not None and self.panel.winfo_exists():
+            self.panel.lift()
+            return
+        app, p = self.app, self.app.p
+        win = tk.Toplevel(app.root, bg=p["ground"])
+        self.panel = win
+        win.title(self.manifest.get("name") or "我的小猫")
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win_dark_titlebar(win, app.dark)
+        self.panel_body = tk.Frame(win, padx=18, pady=14, bg=p["ground"])
+        self.panel_body.pack(fill="both")
+        self.draw_panel()
+        win.bind("<Escape>", lambda _e: win.destroy())
+        win.update_idletasks()
+        x = app.root.winfo_x() - win.winfo_reqwidth() - 12
+        if x < 0:
+            x = app.root.winfo_x() + app.root.winfo_width() + 12
+        win.geometry(f"+{x}+{max(0, app.root.winfo_y() - 40)}")
+        self.app.root.after(30000, self.panel_tick)
+
+    def panel_tick(self):
+        """面板开着时每 30 秒刷新一次（逗猫棒倒计时、数值衰减）。"""
+        if self.panel is not None and self.panel.winfo_exists():
+            self.draw_panel()
+            self.app.root.after(30000, self.panel_tick)
+
+    def draw_panel(self):
+        p, d = self.app.p, self.data
+        body = self.panel_body
+        for w in body.winfo_children():
+            w.destroy()
+        S, G = dict(bg=p["surface"]), dict(bg=p["ground"])
+        name = self.manifest.get("name") or "我的小猫"
+        tk.Label(body, text=f"{name} · 亲密度 Lv.{d['love'] // 10 + 1}", fg=p["text3"],
+                 font=(FONT, 9), **G).pack(anchor="w", padx=4, pady=(0, 6))
+
+        card = tk.Frame(body, padx=16, pady=10, highlightthickness=1,
+                        highlightbackground=p["border"], **S)
+        card.pack(fill="x")
+        bw = int(150 * self.app.ui_scale())
+        for key, label, color in (("full", "饱腹", p["gold"]), ("mood", "心情", p["bar"])):
+            row = tk.Frame(card, pady=4, **S)
+            row.pack(fill="x")
+            tk.Label(row, text=label, fg=p["text3"], font=(FONT, 9), **S).pack(side="left")
+            tk.Label(row, text=f"{d[key]:.0f}", fg=p["text"], font=(NUM_FONT, 10, "bold"),
+                     width=3, anchor="e", **S).pack(side="left", padx=(4, 10))
+            bar = tk.Canvas(row, width=bw, height=6, highlightthickness=0, **S)
+            bar.pack(side="left")
+            bar.create_line(3, 3, bw - 3, 3, width=6, capstyle="round", fill=p["track"])
+            if d[key] > 0:
+                bar.create_line(3, 3, 3 + (bw - 6) * d[key] / 100, 3, width=6,
+                                capstyle="round", fill=color)
+
+        items = tk.Frame(body, padx=16, pady=4, highlightthickness=1,
+                         highlightbackground=p["border"], **S)
+        items.pack(fill="x", pady=(10, 0))
+        rows = [(key, name, f"× {d['inv'].get(key, 0)}", d["inv"].get(key, 0) > 0, "喂",
+                 lambda k=key: (self.feed(k), self.draw_panel())) for key, name, *_ in PET_FOODS]
+        left = self.wand_left()
+        rows.append(("wand", "逗猫棒", f"{left // 60 + 1} 分钟后能玩" if left else "可以玩",
+                     not left, "玩", lambda: (self.wand(), self.draw_panel())))
+        for i, (key, name, count, ok, verb, cmd) in enumerate(rows):
+            if i:
+                tk.Frame(items, height=1, bg=p["hairline"]).pack(fill="x")
+            row = tk.Frame(items, pady=6, **S)
+            row.pack(fill="x")
+            if key in self.icons:
+                tk.Label(row, image=self.icons[key], **S).pack(side="left", padx=(0, 8))
+            tk.Label(row, text=name, fg=p["text"], font=(FONT, 10), **S).pack(side="left")
+            tk.Label(row, text=count, fg=p["text3"], font=(FONT, 9), **S).pack(side="left", padx=8)
+            if ok:
+                PillButton(row, verb, p["accent"], p["on_accent"], cmd, p["surface"],
+                           (FONT, 9)).pack(side="right")
+            else:
+                PillButton(row, verb, p["track"], p["text3"], lambda: None, p["surface"],
+                           (FONT, 9)).pack(side="right")
+
+        body.update_idletasks()
+        nb = " "  # 不折行的空格：Tk 遇到普通空格就会在那儿折行
+        tk.Label(body, text=f"上班每{nb}30{nb}分钟得{nb}1{nb}个零食，每{nb}2{nb}小时得{nb}1{nb}个冻干，"
+                            f"上满一天得{nb}1{nb}个罐头。饱腹和心情会慢慢下降。",
+                 fg=p["text3"], font=(FONT, 8), justify="left",
+                 wraplength=max(200, items.winfo_reqwidth() - 8), **G).pack(anchor="w", padx=4,
+                                                                             pady=(8, 0))
+
+
 # ---------- 界面 ----------
 THEMES = [("auto", "跟随系统"), ("light", "浅色"), ("dark", "深色")]
 
@@ -1013,6 +1597,9 @@ class Floater:
         WX_CITY[0] = self.conf.get("city", "on-143")
         self.stop = threading.Event()
         threading.Thread(target=live_worker, args=(self.stop,), daemon=True).start()
+
+        self.pet = Pet(self)
+        self._geom = ""
 
         if self.conf["hourly"] <= 0:
             self.root.after(300, self.open_settings)
@@ -1202,6 +1789,12 @@ class Floater:
         self.menu.add_command(label=f"检查更新（当前 v{VERSION}）", command=self.manual_update)
         self.menu.add_command(label="退出", command=self.quit)
 
+    def flash(self, msg):
+        """借鼓励语那一行临时显示一句话（15 秒）。"""
+        self.cheer = msg
+        self.lbl_cheer.configure(text=msg)
+        self.cheer_tick = 0
+
     def manual_update(self):
         import threading
         UPD["msg"] = "正在检查更新…"
@@ -1224,6 +1817,8 @@ class Floater:
 
     def drag_move(self, e):
         self.root.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
+        if getattr(self, "pet", None):
+            self.pet.follow()
 
     def drag_end(self, _e):
         self.conf["x"], self.conf["y"] = self.root.winfo_x(), self.root.winfo_y()
@@ -1280,6 +1875,12 @@ class Floater:
         gross_earned = r["earned"]
         r["earned"] *= nf
         r["total"] *= nf
+        if getattr(self, "pet", None):
+            self.pet.update(r, st, c)
+            geom = self.root.winfo_geometry()
+            if geom != self._geom:
+                self._geom = geom
+                self.pet.follow()
         if nf < 1:
             self.lbl_title.configure(text="今天已赚（税后）")
             self.lbl_tax.configure(text=f"税前 {fmt_money(c, gross_earned)} · 扣除约 {(1 - nf) * 100:.1f}%")
@@ -1579,7 +2180,7 @@ class Floater:
         G = dict(bg=p["ground"])
 
         # 分页：顶部分段切换（收入 / 时间 / 其他），底部按钮固定
-        PAGES = ["收入", "时间", "其他"]
+        PAGES = ["收入", "时间", "宠物", "其他"]
         seg = tk.Frame(body, bg=p["track"], padx=2, pady=2)
         seg.pack(pady=(6, 2))
         holder = tk.Frame(body, **G)
@@ -1787,6 +2388,69 @@ class Floater:
         alpha.set(c["alpha"])
         alpha.pack(side="right")
 
+        # 宠物
+        page[0] = pages["宠物"]
+        g = group("宠物", "")
+        pet_group = g
+        pet_on_var = tk.StringVar(value="显示" if c.get("pet_on", True) else "隐藏")
+        option(row(g, "显示宠物"), pet_on_var, ["显示", "隐藏"])
+        pet_zoom_var = tk.StringVar(value={2: "小", 3: "中", 4: "大"}.get(c.get("pet_zoom", 2), "小"))
+        option(row(g, "大小"), pet_zoom_var, ["小", "中", "大"])
+        fr = row(g, "素材")
+        status = tk.Label(fr, text="", fg=p["text2"], font=(FONT, 9), **S)
+
+        def pet_status():
+            m = self.pet.manifest
+            if m:
+                n = len(m.get("states", {}))
+                status.configure(text=f"已导入：{m.get('name', '')}（{n} 个动作）")
+            else:
+                status.configure(text="还没有导入")
+
+        def do_import():
+            from tkinter import filedialog
+            src = filedialog.askdirectory(parent=win, title="选择放宠物素材的文件夹")
+            if not src:
+                return
+
+            def prog(msg):
+                status.configure(text=msg)
+                win.update()
+            prog("处理中…")
+            try:
+                rep = import_pet_assets(src, prog)
+            except Exception as ex:
+                rep = {"ok": False, "error": f"处理失败：{ex}"}
+            if not rep["ok"]:
+                pet_group.hint.configure(text=rep["error"], fg=p["danger"])
+                pet_status()
+                return
+            self.pet.reload()
+            pet_status()
+            lines = [f"导入成功：{len(rep['states'])} 个动作"
+                     + ("，已自动处理成 64×64 像素风" if rep["processed"] else "")]
+            if rep["missing"]:
+                lines.append("缺少（用平时的样子代替）：" +
+                             "、".join(PET_STATE_NAMES[s] for s in rep["missing"]))
+            if rep["skipped"]:
+                lines.append("跳过：" + "；".join(rep["skipped"][:4]))
+            pet_group.hint.configure(text=chr(10).join(lines), fg=p["text3"])
+
+        PillButton(fr, "导入素材…", p["accent"], p["on_accent"], do_import, p["surface"],
+                   (FONT, 9)).pack(side="right")
+        status.pack(side="right", padx=(0, 8))
+        pet_status()
+        pet_group.hint.configure(text=chr(10).join([
+            "选一个放 PNG 图片的文件夹，按动作给文件命名：",
+            "必需：idle_1.png（平时）",
+            "可选：eat、play、sleep、happy、click、hungry、",
+            "work、rain、snow、cold、hot、sunny",
+            "多帧动画：idle_1、idle_2、idle_3…",
+            "图标：snack、freeze_dried、can、wand",
+            "任意大小都行；透明或纯绿色背景最好，",
+            "会自动抠图、缩成像素风并对齐。",
+            "左键点猫有反应，右键猫打开喂食面板。"]))
+
         # 底部：错误提示 + 按钮
         err = tk.Label(body, text="", fg=p["danger"], font=(FONT, 9), anchor="w",
                        justify="left", wraplength=330, **G)
@@ -1841,6 +2505,7 @@ class Floater:
             if not any(day_on):
                 return fail("至少选一个工作日")
 
+            pet_before = (c.get("pet_on", True), c.get("pet_zoom", 2))
             theme = next(k for k, n in THEMES if n == theme_var.get())
             theme_changed = theme != c.get("theme", "auto")
             c.update(
@@ -1853,9 +2518,14 @@ class Floater:
                 alpha=float(alpha.get()),
                 theme=theme,
                 city=next(cid for n, cid in CITIES if n == city_var.get()),
+                pet_on=pet_on_var.get() == "显示",
+                pet_zoom={"小": 2, "中": 3, "大": 4}[pet_zoom_var.get()],
             )
+            pet_changed = (c["pet_on"], c["pet_zoom"]) != pet_before
             save_conf(c)
             WX_CITY[0] = c["city"]
+            if pet_changed:
+                self.pet.reload()
             self.cheer_state = None
             win.destroy()
             if theme_changed:
