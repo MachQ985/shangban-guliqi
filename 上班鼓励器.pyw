@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.6.1"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.7.0"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -285,6 +285,106 @@ def fortune_for(day):
     level, _, (lo, hi), lines = rnd.choices(FORTUNE_LEVELS, weights=[x[1] for x in FORTUNE_LEVELS])[0]
     return {"level": level, "text": rnd.choice(lines), "score": rnd.randint(lo, hi),
             "yi": rnd.sample(FORTUNE_YI, 2), "ji": rnd.sample(FORTUNE_JI, 2)}
+
+
+# ---------- 塔罗牌：韦特塔罗 1909 原版（Pamela Colman Smith 绘，公有领域） ----------
+# 牌面图片放在仓库 tarot/ 文件夹，程序只自带牌名。第一次用时从 GitHub 下到
+# %APPDATA%\上班鼓励器\tarot\；开发目录里有 tarot/ 就直接用本地的。
+TAROT_MAJOR = [
+    ("愚者", "The Fool"), ("魔术师", "The Magician"), ("女祭司", "The High Priestess"),
+    ("皇后", "The Empress"), ("皇帝", "The Emperor"), ("教皇", "The Hierophant"),
+    ("恋人", "The Lovers"), ("战车", "The Chariot"), ("力量", "Strength"),
+    ("隐士", "The Hermit"), ("命运之轮", "Wheel of Fortune"), ("正义", "Justice"),
+    ("倒吊人", "The Hanged Man"), ("死神", "Death"), ("节制", "Temperance"),
+    ("恶魔", "The Devil"), ("高塔", "The Tower"), ("星星", "The Star"),
+    ("月亮", "The Moon"), ("太阳", "The Sun"), ("审判", "Judgement"), ("世界", "The World"),
+]
+TAROT_SUITS = [("wand", "权杖", "Wands"), ("cups", "圣杯", "Cups"),
+               ("swor", "宝剑", "Swords"), ("pent", "星币", "Pentacles")]
+TAROT_RANKS = [("王牌", "Ace"), ("二", "Two"), ("三", "Three"), ("四", "Four"), ("五", "Five"),
+               ("六", "Six"), ("七", "Seven"), ("八", "Eight"), ("九", "Nine"), ("十", "Ten"),
+               ("侍从", "Page"), ("骑士", "Knight"), ("王后", "Queen"), ("国王", "King")]
+# (图片名, 中文名, 英文名)，共 78 张；牌背图片叫 back
+TAROT_CARDS = [(f"{i:02d}", zh, en) for i, (zh, en) in enumerate(TAROT_MAJOR)] + [
+    (f"{k}{i + 1:02d}", szh + rzh, f"{ren} of {sen}")
+    for k, szh, sen in TAROT_SUITS for i, (rzh, ren) in enumerate(TAROT_RANKS)]
+TAROT_BACK = "back"
+TAROT_POSITIONS = ["过去", "现在", "未来"]
+TAROT_DIR = os.path.join(CONF_DIR, "tarot")
+TAROT_DEV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tarot")
+TAROT_DL = {"busy": False, "done": 0, "total": 0, "error": ""}  # 后台下载进度，界面线程只读
+
+
+def tarot_path(key):
+    """牌面图片路径（PNG，150×260）；key 是 TAROT_CARDS 里的图片名或 TAROT_BACK。"""
+    dev = os.path.join(TAROT_DEV_DIR, key + ".png")
+    return dev if os.path.isfile(dev) else os.path.join(TAROT_DIR, key + ".png")
+
+
+def tarot_missing():
+    keys = [c[0] for c in TAROT_CARDS] + [TAROT_BACK]
+    return [k for k in keys if not os.path.isfile(tarot_path(k))]
+
+
+def tarot_ready():
+    return not tarot_missing()
+
+
+def tarot_download():
+    """后台线程：补齐缺的牌面（约 2 MB）。由 tarot_start_download 启动，进度看 TAROT_DL。"""
+    import urllib.request
+    miss = tarot_missing()
+    TAROT_DL.update(done=0, total=len(miss), error="")
+    try:
+        os.makedirs(TAROT_DIR, exist_ok=True)
+        for key in miss:
+            req = urllib.request.Request(REPO_RAW + f"tarot/{key}.png", headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read()
+            if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise ValueError(f"{key}.png 不是图片")
+            dst = os.path.join(TAROT_DIR, key + ".png")
+            with open(dst + ".part", "wb") as f:
+                f.write(data)
+            os.replace(dst + ".part", dst)
+            TAROT_DL["done"] += 1
+    except Exception as ex:
+        TAROT_DL["error"] = f"牌面下载失败：{ex}"
+    finally:
+        TAROT_DL["busy"] = False
+
+
+def tarot_start_download():
+    import threading
+    if not TAROT_DL["busy"] and tarot_missing():
+        TAROT_DL["busy"] = True  # 在界面线程先占住，连点也只开一个线程
+        threading.Thread(target=tarot_download, daemon=True).start()
+
+
+def tarot_shuffle():
+    """洗好的一副牌：[(图片名, 是否逆位), ...]，78 张，每张正逆位各一半概率。"""
+    rnd = random.SystemRandom()
+    deck = [(c[0], rnd.random() < 0.5) for c in TAROT_CARDS]
+    rnd.shuffle(deck)
+    return deck
+
+
+def tarot_name(key):
+    """图片名 → (中文名, 英文名)。"""
+    c = next(c for c in TAROT_CARDS if c[0] == key)
+    return c[1], c[2]
+
+
+def tarot_prompt(question, picks):
+    """picks：按 过去 / 现在 / 未来 顺序的 [(图片名, 是否逆位), ...]，生成发给 AI 的提示词。"""
+    lines = ["你是一名专业的塔罗师，请帮我解读这次抽到的牌。",
+             f"我的问题是：{question.strip()}",
+             "我用的是韦特塔罗，三张牌阵（过去 / 现在 / 未来），抽到的牌是："]
+    for pos, (key, rev) in zip(TAROT_POSITIONS, picks):
+        zh, en = tarot_name(key)
+        lines.append(f"{pos}：{zh}（{en}），{'逆位' if rev else '正位'}")
+    lines.append("请结合我的问题，逐张解读每张牌在对应位置上的含义，再给出整体的分析和建议。")
+    return "\n".join(lines)
 
 
 # ---------- 配置 ----------
@@ -1869,7 +1969,7 @@ class PillButton(tk.Canvas):
         r = h / 2
         pts = [r, 0, w - r, 0, w, 0, w, r, w, h - r, w, h, w - r, h, r, h, 0, h, 0, h - r, 0, r, 0, 0]
         self.shape = self.create_polygon(pts, smooth=True, fill=bg, outline="")
-        self.create_text(w / 2, h / 2, text=text, fill=fg, font=f)
+        self.create_text(w / 2, h / 2, text=text, fill=fg, font=f, tags=("text",))
         self.bind("<ButtonPress-1>", lambda _e: self.itemconfigure(self.shape, fill=self._dim()))
         self.bind("<ButtonRelease-1>", self._release)
 
@@ -1881,6 +1981,573 @@ class PillButton(tk.Canvas):
         self.itemconfigure(self.shape, fill=self.bg)
         if 0 <= e.x <= self.winfo_width() and 0 <= e.y <= self.winfo_height():
             self.command()
+
+
+class TarotScrollbar(tk.Canvas):
+    """牌桌专用细滚动条，自己绘制以避开 Windows 原生白色底槽。"""
+
+    def __init__(self, parent, palette, scale, command):
+        self.p, self.s, self.command = palette, scale, command
+        self.first, self.last, self.drag_offset = 0.0, 1.0, None
+        super().__init__(parent, width=max(8, round(10 * scale)),
+                         bg=palette["ground"], highlightthickness=0, bd=0)
+        self.bind("<Configure>", lambda _e: self.draw())
+        self.bind("<Button-1>", self.press)
+        self.bind("<B1-Motion>", self.drag)
+        self.bind("<ButtonRelease-1>", self.release)
+
+    def bounds(self):
+        h = self.winfo_height()
+        thumb = min(h, max(round(24 * self.s), h * (self.last - self.first)))
+        travel = max(0, h - thumb)
+        top = travel * self.first / max(1e-9, 1 - (self.last - self.first))
+        return top, thumb, travel
+
+    def set(self, first, last):
+        self.first, self.last = float(first), float(last)
+        self.draw()
+
+    def draw(self):
+        self.delete("all")
+        if self.last - self.first >= 1:
+            return
+        top, thumb, _ = self.bounds()
+        x = self.winfo_width() / 2
+        width = max(3, round(4 * self.s))
+        self.create_line(x, top + width / 2, x, top + thumb - width / 2,
+                         width=width, capstyle="round",
+                         fill=self.p["text2" if self.drag_offset is not None else "text3"])
+
+    def press(self, event):
+        top, thumb, _ = self.bounds()
+        if top <= event.y <= top + thumb:
+            self.drag_offset = event.y - top
+            self.draw()
+        else:
+            self.command("scroll", -1 if event.y < top else 1, "pages")
+
+    def drag(self, event):
+        if self.drag_offset is not None:
+            _, _, travel = self.bounds()
+            fraction = max(0, min(1, (event.y - self.drag_offset) / max(1, travel)))
+            self.command("moveto", fraction * (1 - (self.last - self.first)))
+
+    def release(self, _event):
+        self.drag_offset = None
+        self.draw()
+
+
+class TarotTable:
+    """一张持续存在的牌桌：提问、洗牌、选择、翻牌和复制提示词。"""
+
+    def __init__(self, app):
+        self.app, self.p = app, app.p
+        self.jobs, self.images, self.pixels = set(), {}, {}
+        self.closed, self.state = False, "loading"
+        self.selected, self.revealed, self.hover = [], set(), None
+        self.question, self.deck = "", []
+        self.win = win = tk.Toplevel(app.root, bg=self.p["ground"])
+        win.title("塔罗牌 · 过去 / 现在 / 未来")
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.protocol("WM_DELETE_WINDOW", self.close)
+        win.bind("<Escape>", lambda _e: self.close())
+        win.bind("<Destroy>", self.destroyed, add="+")
+        win.bind("<Return>", self.enter)
+        win_dark_titlebar(win, app.dark)
+        self.s = app.ui_scale()
+        self.width = min(round(820 * self.s),
+                         int(win.winfo_screenwidth() * .9) - self.px(24))
+        self.w = self.width / self.s - 44
+        # 小屏幕只滚动内容，不把窗口推到屏幕外；滚轮绑定只属于这一个窗口。
+        self.viewport = tk.Canvas(win, bg=self.p["ground"], highlightthickness=0,
+                                  width=self.width, height=round(690 * self.s))
+        self.scroll = TarotScrollbar(win, self.p, self.s, self.viewport.yview)
+        self.viewport.configure(yscrollcommand=self.scroll.set)
+        self.viewport.pack(side="left", fill="both", expand=True)
+        self.body = tk.Frame(self.viewport, bg=self.p["ground"],
+                             padx=self.px(22), pady=self.px(18))
+        self.viewport.create_window(0, 0, anchor="nw", window=self.body, width=self.width)
+        self.body.bind("<Configure>", lambda _e: self.viewport.configure(
+            scrollregion=self.viewport.bbox("all")))
+        win.bind("<MouseWheel>", self.wheel)
+        win.bind("<Button-4>", lambda _e: self.viewport.yview_scroll(-2, "units"))
+        win.bind("<Button-5>", lambda _e: self.viewport.yview_scroll(2, "units"))
+        self.label(self.body, "韦特塔罗 · 三张牌阵", 9, "text3").pack(anchor="w")
+        self.title = self.label(self.body, "留一点时间，给心里的问题", 20, "text", True)
+        self.title.pack(anchor="w", pady=(self.px(5), self.px(4)))
+        self.hint = self.label(self.body, "准备好后，亲手选出过去、现在与未来。", 10, "text2")
+        self.hint.pack(anchor="w", pady=(0, self.px(14)))
+        # 第二排两端的牌底约为 446，留出描边、取整和边界的余量。
+        self.cv = tk.Canvas(self.body, width=self.px(self.w), height=self.px(456),
+                            bg=self.p["surface"], highlightthickness=1,
+                            highlightbackground=self.p["border"], bd=0)
+        self.cv.pack(fill="x")
+        self.cv.bind("<Motion>", self.motion)
+        self.cv.bind("<Leave>", lambda _e: self.set_hover(None))
+        self.cv.bind("<Button-1>", self.click)
+        self.controls = tk.Frame(self.body, bg=self.p["ground"])
+        self.controls.pack(fill="x", pady=(self.px(14), 0))
+        # 支持键盘选牌：左右移动焦点，空格选牌；焦点牌与悬停牌共享高亮。
+        self.cv.configure(takefocus=True)
+        self.cv.bind("<Left>", lambda _e: self.keyboard(-1))
+        self.cv.bind("<Right>", lambda _e: self.keyboard(1))
+        self.cv.bind("<space>", self.keyboard_pick)
+        self.poll()
+        win.update_idletasks()
+        self.fit()
+
+    def px(self, n):
+        return max(1, round(n * self.s))
+
+    def label(self, parent, text, size=10, color="text", bold=False):
+        return tk.Label(parent, text=text, bg=parent["bg"], fg=self.p[color],
+                        font=(FONT, size, "bold" if bold else "normal"),
+                        anchor="w", justify="left", wraplength=self.px(self.w - 8))
+
+    def button(self, text, command, primary=True):
+        return PillButton(self.controls, text,
+                          self.p["accent" if primary else "track"],
+                          self.p["on_accent" if primary else "text"], command,
+                          self.p["ground"], (FONT, 10))
+
+    def later(self, ms, callback):
+        """每个回调都有登记；关窗、重开牌局时统一取消。"""
+        if self.closed:
+            return
+        job = None
+
+        def run():
+            self.jobs.discard(job)
+            if not self.closed:
+                callback()
+        job = self.win.after(ms, run)
+        self.jobs.add(job)
+
+    def cancel_jobs(self):
+        for job in self.jobs:
+            try:
+                self.win.after_cancel(job)
+            except tk.TclError:
+                pass
+        self.jobs.clear()
+
+    def destroyed(self, event):
+        if event.widget == self.win:
+            self.closed = True
+            self.cancel_jobs()
+            self.images.clear()
+            self.pixels.clear()
+            if getattr(self.app, "tarot_win", None) is self.win:
+                self.app.tarot_win = None
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self.cancel_jobs()
+            self.win.destroy()
+
+    def wheel(self, event):
+        self.viewport.yview_scroll((-1 if event.delta > 0 else 1) *
+                                  (2 if abs(event.delta) >= 120 else 1), "units")
+
+    def fit(self):
+        self.win.update_idletasks()
+        h = min(self.body.winfo_reqheight(), int(self.win.winfo_screenheight() * .84))
+        overflow = self.body.winfo_reqheight() > h
+        if overflow:
+            self.scroll.pack(side="right", fill="y")
+        else:
+            self.scroll.pack_forget()
+        width = self.width + (self.scroll.winfo_reqwidth() if overflow else 0)
+        x = self.app.root.winfo_x() - width - self.px(12)
+        if x < 0:
+            x = self.app.root.winfo_x() + self.app.root.winfo_width() + self.px(12)
+        x = max(0, min(x, self.win.winfo_screenwidth() - width))
+        y = max(0, min(self.app.root.winfo_y(), self.win.winfo_screenheight() - h - self.px(48)))
+        self.win.geometry(f"{width}x{h}+{x}+{y}")
+
+    def clear_controls(self):
+        for child in self.controls.winfo_children():
+            child.destroy()
+
+    def text(self, x, y, text, size=10, color="text2", bold=False, **kw):
+        return self.cv.create_text(x * self.s, y * self.s, text=text,
+                                   fill=self.p[color],
+                                   font=(FONT, size, "bold" if bold else "normal"), **kw)
+
+    def image(self, key, width, rev=False, height=None):
+        """缓存图片。整数缩小用 Tk；任意尺寸用标准库生成 PPM，无第三方依赖。"""
+        w = self.px(width)
+        h = self.px(height if height is not None else width * 260 / 150)
+        cache = (key, rev, w, h)
+        if cache in self.images:
+            return self.images[cache]
+        source_key = (key, rev)
+        if source_key not in self.pixels:
+            src = tk.PhotoImage(master=self.win, file=tarot_path(key))
+            if rev:
+                # Tk 8.6 photo 手册明确支持负数 subsample，两个轴同时反转即旋转 180°。
+                src = src.subsample(-1, -1)
+            rows = src.tk.splitlist(src.tk.call(src, "data", "-background", self.p["surface"]))
+            rgb = [bytes.fromhex("".join(c[1:] for c in src.tk.splitlist(row))) for row in rows]
+            self.pixels[source_key] = (src.width(), src.height(), rgb)
+        sw, sh, rows = self.pixels[source_key]
+        xs = [min(sw - 1, x * sw // w) * 3 for x in range(w)]
+        scaled = {}
+        for sy in set(y * sh // h for y in range(h)):
+            row = rows[sy]
+            scaled[sy] = b"".join(row[x:x + 3] for x in xs)
+        data = f"P6\n{w} {h}\n255\n".encode("ascii") + b"".join(
+            scaled[y * sh // h] for y in range(h))
+        img = tk.PhotoImage(master=self.win, data=data, format="PPM")
+        self.images[cache] = img
+        return img
+
+    def card(self, x, y, width, key=TAROT_BACK, rev=False, tags=(), height=None):
+        img = self.image(key, width, rev, height)
+        return self.cv.create_image(x * self.s, y * self.s, image=img, tags=tags)
+
+    def poll(self):
+        if tarot_ready():
+            try:
+                self.reset()
+            except (tk.TclError, OSError, ValueError) as ex:
+                self.error(f"牌面无法读取：{ex}")
+            return
+        if TAROT_DL["error"] and not TAROT_DL["busy"]:
+            self.error(TAROT_DL["error"])
+            return
+        n = 79 - len(tarot_missing())
+        self.cv.delete("all")
+        self.text(self.w / 2, 196, f"正在准备牌面 {n}/79", 16, "text", True)
+        self.text(self.w / 2, 230, "第一次需要下载，准备好后会自动进入牌桌。", 10)
+        self.cv.create_line(60 * self.s, 270 * self.s, (self.w - 60) * self.s,
+                            270 * self.s, fill=self.p["track"], width=self.px(3))
+        if n:
+            self.cv.create_line(60 * self.s, 270 * self.s,
+                                (60 + (self.w - 120) * n / 79) * self.s, 270 * self.s,
+                                fill=self.p["accent"], width=self.px(3))
+        self.later(180, self.poll)
+
+    def error(self, message):
+        self.state = "error"
+        self.cv.delete("all")
+        self.text(self.w / 2, 180, "牌面还没有准备好", 17, "text", True)
+        self.text(self.w / 2, 230, message, 10, "danger", width=self.px(self.w - 60))
+        self.clear_controls()
+        self.button("重试", self.retry).pack(side="right")
+
+    def retry(self):
+        self.clear_controls()
+        self.state = "loading"
+        self.images.clear()
+        self.pixels.clear()
+        tarot_start_download()
+        self.poll()
+
+    def reset(self):
+        self.cancel_jobs()
+        self.state, self.selected, self.revealed, self.hover = "question", [], set(), None
+        self.deck, self.question = [], ""
+        # 删除上一局的图像缓存，防止反复抽牌积累翻牌帧。
+        self.images.clear()
+        self.pixels.clear()
+        self.cv.configure(height=self.px(456))
+        self.title.configure(text="留一点时间，给心里的问题")
+        self.hint.configure(text="写下你的问题，再开始这一次抽牌。")
+        self.cv.delete("all")
+        cx = self.w / 2
+        self.cv.create_oval((cx - 135) * self.s, 330 * self.s,
+                            (cx + 135) * self.s, 348 * self.s,
+                            fill=self.p["input"], outline="")
+        for i in range(6):
+            self.card(cx + (5 - i) * 3 - 8, 192 - i * 2, 112)
+        self.text(cx, 372, "七十八张牌，一个此刻的问题。", 11)
+        self.clear_controls()
+        self.label(self.controls, "你想问什么？", 11, "text", True).pack(anchor="w")
+        row = tk.Frame(self.controls, bg=self.p["ground"])
+        row.pack(fill="x", pady=(self.px(7), 0))
+        self.question_var = tk.StringVar(master=self.win)
+        self.entry = tk.Entry(row, textvariable=self.question_var, font=(FONT, 11),
+                              bg=self.p["surface"], fg=self.p["text"],
+                              insertbackground=self.p["text"], relief="flat", bd=0,
+                              highlightthickness=1, highlightbackground=self.p["border"],
+                              highlightcolor=self.p["accent"])
+        self.entry.pack(side="left", fill="x", expand=True, ipady=self.px(9))
+        self.submit_btn = PillButton(row, "确认", self.p["track"], self.p["text3"],
+                                     self.submit, self.p["ground"], (FONT, 10))
+        self.submit_btn.pack(side="right", padx=(self.px(12), 0))
+        self.question_var.trace_add("write", lambda *_: self.submit_feedback())
+        self.entry.focus_set()
+        self.viewport.yview_moveto(0)
+        self.fit()
+
+    def button_feedback(self, button, enabled):
+        button.bg = self.p["accent" if enabled else "track"]
+        button.itemconfigure(button.shape, fill=button.bg)
+        button.itemconfigure("text", fill=self.p["on_accent" if enabled else "text3"])
+        button.configure(cursor="hand2" if enabled else "arrow")
+
+    def submit_feedback(self):
+        self.button_feedback(self.submit_btn, bool(self.question_var.get().strip()))
+
+    def enter(self, _event=None):
+        if self.state == "question":
+            self.submit()
+        elif self.state == "picking":
+            self.confirm()
+        return "break"
+
+    def submit(self, question=None):
+        if self.state != "question":
+            return
+        if question is not None:
+            self.question_var.set(question)
+        question = self.question_var.get().strip()
+        if not question:
+            self.entry.focus_set()
+            return
+        self.question, self.deck, self.state = question, tarot_shuffle(), "shuffling"
+        self.clear_controls()
+        self.title.configure(text="让问题，慢慢落定")
+        self.hint.configure(text="正在洗牌…")
+        self.button("重新开始", self.reset, False).pack(side="right")
+        self.shuffle_frame()
+
+    def shuffle_frame(self, frame=0):
+        import math
+        self.cv.delete("all")
+        t = frame / 100
+        # 两次散开、交叠，再收拢；最后从同一个中心铺到两排。
+        spread = math.sin(math.pi * t) ** 1.2
+        for i in range(12):
+            a = i * math.tau / 12 + t * math.tau * 2
+            x = self.w / 2 + math.cos(a) * min(180, self.w * .26) * spread
+            y = 210 + math.sin(a) * 78 * spread + (i - 6) * (1 - spread) * 1.5
+            self.card(x, y, 94)
+        self.text(self.w / 2, 390, "把注意力，留在你的问题上。", 10)
+        if frame < 100:
+            self.later(16, lambda: self.shuffle_frame(frame + 1))
+        else:
+            self.state = "dealing"
+            self.deal_frame()
+
+    def spread_xy(self, i):
+        row, col = divmod(i, 39)
+        width = min(48, self.w * .09)
+        left = 24 + width / 2
+        x = left + col * (self.w - 2 * left) / 38
+        y = 302 + row * 92 + 10 * ((col - 19) / 19) ** 2
+        return x, y, width
+
+    def slot_xy(self, slot):
+        return self.w * (slot + 1) / 4, 132
+
+    def slots(self):
+        cw = min(108, self.w / 4 - 22)
+        for j, pos in enumerate(TAROT_POSITIONS):
+            x, y = self.slot_xy(j)
+            self.text(x, 22, f"{j + 1:02d}  {pos}", 10, "text2", True)
+            self.cv.create_rectangle((x - cw / 2 - 4) * self.s, (y - cw * 260 / 300 - 4) * self.s,
+                                     (x + cw / 2 + 4) * self.s, (y + cw * 260 / 300 + 4) * self.s,
+                                     outline=self.p["border"], dash=(3, 5), tags=("slot",))
+            if j >= len(self.selected):
+                self.text(x, y, "待选", 10, "text3")
+        return cw
+
+    def deal_frame(self, frame=0):
+        self.cv.delete("all")
+        self.slots()
+        t = 1 - (1 - frame / 24) ** 3
+        for i in range(78):
+            x, y, width = self.spread_xy(i)
+            self.card(self.w / 2 + (x - self.w / 2) * t, 210 + (y - 210) * t, width)
+        if frame < 24:
+            self.later(16, lambda: self.deal_frame(frame + 1))
+        else:
+            self.state = "picking"
+            self.title.configure(text="凭直觉，选出你的三张牌")
+            self.pick_controls()
+            self.draw()
+            self.cv.focus_set()
+
+    def pick_controls(self):
+        self.clear_controls()
+        self.confirm_btn = self.button("确定", self.confirm)
+        self.confirm_btn.pack(side="right")
+        self.button("重新开始", self.reset, False).pack(side="right", padx=self.px(10))
+        self.label(self.controls, "点已选牌可撤回", 9, "text3").pack(side="left")
+
+    def draw(self):
+        self.cv.delete("all")
+        cw = self.slots()
+        if self.state == "picking":
+            for i in range(78):
+                if i not in self.selected:
+                    x, y, width = self.spread_xy(i)
+                    self.card(x, y, width)
+            # 高亮不改变命中顺序：仍按原来露出的窄条命中，避免悬停时来回跳牌。
+            if self.hover is not None and self.hover not in self.selected:
+                x, y, width = self.spread_xy(self.hover)
+                self.cv.create_rectangle((x - width / 2 - 3) * self.s, (y - 12 - width * 260 / 300 - 3) * self.s,
+                                         (x + width / 2 + 3) * self.s, (y - 12 + width * 260 / 300 + 3) * self.s,
+                                         fill=self.p["surface"], outline=self.p["accent"], width=self.px(3))
+                self.card(x, y - 12, width)
+            self.hint.configure(text=(f"已选 {len(self.selected)}/3 · 下一张：{TAROT_POSITIONS[len(self.selected)]}"
+                                      if len(self.selected) < 3 else "三张牌已就位。准备好后，点「确定」翻牌。"))
+            self.button_feedback(self.confirm_btn, len(self.selected) == 3)
+        for slot, i in enumerate(self.selected):
+            x, y = self.slot_xy(slot)
+            key, rev = self.deck[i]
+            face = slot in self.revealed
+            self.card(x, y, cw, key if face else TAROT_BACK, rev if face else False)
+            if face:
+                self.text(x, 244, tarot_name(key)[0], 11, "text", True)
+                self.text(x, 268, "逆位" if rev else "正位", 9)
+            elif self.state == "picking":
+                self.text(x, 244, "点击撤回", 9, "text3")
+
+    def hit(self, x, y):
+        for i in reversed(range(78)):
+            if i in self.selected:
+                continue
+            cx, cy, width = self.spread_xy(i)
+            if abs(x - cx) <= width / 2 and abs(y - cy) <= width * 260 / 300:
+                return i
+        return None
+
+    def set_hover(self, i):
+        if i is not None and (not isinstance(i, int) or not 0 <= i < 78 or i in self.selected):
+            i = None
+        if self.state == "picking" and self.hover != i:
+            self.hover = i
+            self.cv.configure(cursor="hand2" if i is not None else "arrow")
+            self.draw()
+
+    def motion(self, event):
+        if self.state == "picking":
+            self.set_hover(self.hit(self.cv.canvasx(event.x) / self.s,
+                                   self.cv.canvasy(event.y) / self.s))
+
+    def click(self, event):
+        if self.state != "picking":
+            return
+        x, y = self.cv.canvasx(event.x) / self.s, self.cv.canvasy(event.y) / self.s
+        cw = min(108, self.w / 4 - 22)
+        for slot, i in enumerate(self.selected):
+            cx, cy = self.slot_xy(slot)
+            if abs(x - cx) <= cw / 2 + 8 and abs(y - cy) <= cw * 260 / 300 + 8:
+                self.pick(i)
+                return
+        i = self.hit(x, y)
+        if i is not None:
+            self.pick(i)
+
+    def keyboard(self, direction):
+        if self.state != "picking":
+            return "break"
+        i = self.hover if self.hover is not None else (-1 if direction > 0 else 78)
+        for _ in range(78):
+            i = (i + direction) % 78
+            if i not in self.selected:
+                self.set_hover(i)
+                break
+        return "break"
+
+    def keyboard_pick(self, _event):
+        if self.hover is not None:
+            self.pick(self.hover)
+        return "break"
+
+    def pick(self, i):
+        if self.state != "picking" or not isinstance(i, int) or not 0 <= i < 78:
+            return
+        if i in self.selected:
+            self.selected.remove(i)
+        elif len(self.selected) < 3:
+            self.selected.append(i)
+        self.hover = None
+        self.draw()
+
+    def confirm(self):
+        if self.state != "picking" or len(self.selected) != 3:
+            return
+        # 在开始动画之前读取三张牌；损坏图片可重试，不留下半翻开的牌局。
+        try:
+            cw = min(108, self.w / 4 - 22)
+            for i in self.selected:
+                key, rev = self.deck[i]
+                self.image(key, cw, rev)
+        except (tk.TclError, OSError, ValueError) as ex:
+            self.error(f"牌面无法读取：{ex}")
+            return
+        self.state, self.hover = "revealing", None
+        self.cv.configure(cursor="arrow")
+        self.clear_controls()
+        self.button("重新开始", self.reset, False).pack(side="right")
+        self.title.configure(text="过去、现在、未来，依次展开")
+        self.hint.configure(text="正在翻牌…")
+        self.flip()
+
+    def flip(self, slot=0, frame=0):
+        import math
+        self.draw()
+        x, y = self.slot_xy(slot)
+        cw = min(108, self.w / 4 - 22)
+        width = max(1 / self.s, cw * abs(math.cos(math.pi * frame / 20)))
+        # 覆盖这一张的原图，保留牌位和其他牌；宽度收窄时高度不变。
+        self.cv.create_rectangle((x - cw / 2 - 1) * self.s, (y - cw * 260 / 300 - 1) * self.s,
+                                 (x + cw / 2 + 1) * self.s, (y + cw * 260 / 300 + 1) * self.s,
+                                 fill=self.p["surface"], outline="")
+        key, rev = self.deck[self.selected[slot]]
+        self.card(x, y, width, key if frame >= 10 else TAROT_BACK,
+                  rev if frame >= 10 else False, height=cw * 260 / 150)
+        if frame < 20:
+            self.later(16, lambda: self.flip(slot, frame + 1))
+        else:
+            self.revealed.add(slot)
+            self.draw()
+            if slot < 2:
+                self.later(160, lambda: self.flip(slot + 1))
+            else:
+                self.later(180, self.result)
+
+    def result(self):
+        self.state = "result"
+        self.draw()
+        self.cv.configure(height=self.px(300))
+        self.title.configure(text="你的三张牌，已展开")
+        self.hint.configure(text=self.question)
+        self.clear_controls()
+        self.label(self.controls, "带着问题与牌面，去问 AI", 11, "text", True).pack(anchor="w")
+        self.prompt = tarot_prompt(self.question, [self.deck[i] for i in self.selected])
+        area = tk.Frame(self.controls, bg=self.p["surface"], highlightthickness=1,
+                        highlightbackground=self.p["border"])
+        area.pack(fill="x", pady=(self.px(8), self.px(12)))
+        text = tk.Text(area, height=len(self.prompt.splitlines()), width=1, wrap="word", font=(FONT, 10),
+                       relief="flat", bd=0, padx=self.px(12), pady=self.px(10),
+                       bg=self.p["surface"], fg=self.p["text2"],
+                       selectbackground=self.p["accent"], selectforeground=self.p["on_accent"],
+                       highlightthickness=0)
+        text.pack(fill="x", expand=True)
+        text.insert("1.0", self.prompt)
+        text.configure(state="disabled")
+        # 先完成宽度布局，再数实际显示行；长问题和窄屏自动换行也能完整展开。
+        text.update_idletasks()
+        display_lines = (text.count("1.0", "end-1c", "displaylines") or (0,))[0] + 1
+        text.configure(height=max(len(self.prompt.splitlines()), display_lines))
+        self.copy_btn = self.button("复制", self.copy)
+        self.copy_btn.pack(side="right")
+        self.button("再抽一次", self.reset, False).pack(side="right", padx=self.px(10))
+        self.viewport.yview_moveto(0)
+        self.fit()
+
+    def copy(self):
+        self.win.clipboard_clear()
+        self.win.clipboard_append(self.prompt)
+        self.copy_btn.itemconfigure("text", text="已复制")
+        self.later(1400, lambda: self.copy_btn.itemconfigure("text", text="复制"))
 
 
 class Floater:
@@ -2027,16 +2694,29 @@ class Floater:
             self.sun_icons.append(cv)
             self.sun_labels.append(lb)
 
-        # 今日签：贴在“明天”和日出日落两行的右边
+        # 两个入口独占一行，用正常布局给天气和日落时间留足空间。
         fb = tk.Frame(self.frame, **S)
-        fb.place(in_=wx_frames[2], relx=1.0, rely=0.0, anchor="ne")
-        self.fortune_title = tk.Label(fb, text="今日签", fg=p["text3"], font=(FONT, 9),
+        fb.pack(fill="x", pady=(8, 0))
+        tcol = tk.Frame(fb, cursor="hand2", **S)
+        tcol.pack(side="right")
+        fcol = tk.Frame(fb, cursor="hand2", **S)
+        fcol.pack(side="left")
+        self.tarot_title = tk.Label(tcol, text="塔罗牌", fg=p["text2"], font=(FONT, 9),
+                                    cursor="hand2", **S)
+        self.tarot_title.pack(side="left")
+        self.tarot_lv = tk.Label(tcol, text="抽牌 ›", fg=p["accent"], font=(FONT, 10, "bold"),
+                                 cursor="hand2", **S)
+        self.tarot_lv.pack(side="left", padx=(4, 0))
+        for w in (tcol, self.tarot_title, self.tarot_lv):
+            w.bind("<ButtonRelease-1>", self.on_tarot_click)
+            w.bind("<Double-Button-1>", lambda _e: "break")
+        self.fortune_title = tk.Label(fcol, text="今日签", fg=p["text3"], font=(FONT, 9),
                                       cursor="hand2", **S)
-        self.fortune_title.pack(anchor="e")
-        self.fortune_lv = tk.Label(fb, text="", fg=p["accent"], font=(FONT, 11, "bold"),
+        self.fortune_title.pack(side="left")
+        self.fortune_lv = tk.Label(fcol, text="", fg=p["accent"], font=(FONT, 11, "bold"),
                                    cursor="hand2", **S)
-        self.fortune_lv.pack(anchor="e")
-        for w in (fb, self.fortune_title, self.fortune_lv):
+        self.fortune_lv.pack(side="left", padx=(4, 0))
+        for w in (fcol, self.fortune_title, self.fortune_lv):
             w.bind("<ButtonRelease-1>", self.on_fortune_click)
             w.bind("<Double-Button-1>", lambda _e: "break")  # 双击这里不切换迷你模式
         self.fortune_anim = False
@@ -2104,6 +2784,7 @@ class Floater:
 
         self.menu = tk.Menu(self.root, tearoff=0, font=(FONT, 10))
         self.menu.add_command(label="设置…", command=self.open_settings)
+        self.menu.add_command(label="塔罗牌…", command=self.open_tarot)
         self.menu.add_command(label="迷你模式 / 完整模式", command=self.toggle_mini)
         self.autostart_var = tk.BooleanVar(value=autostart_enabled())
         self.menu.add_checkbutton(label="开机自启", variable=self.autostart_var,
@@ -2485,6 +3166,43 @@ class Floater:
             x = self.root.winfo_x() + self.root.winfo_width() + 12
         y = max(0, min(self.root.winfo_y(), win.winfo_screenheight() - h - 60))
         win.geometry(f"+{x}+{y}")
+
+    # ---------- 塔罗牌 ----------
+    def on_tarot_click(self, e):
+        px, py = getattr(self, "_press", (e.x_root, e.y_root))
+        if abs(e.x_root - px) > 4 or abs(e.y_root - py) > 4:
+            return  # 是在拖窗口
+        self.open_tarot()
+
+    def open_tarot(self):
+        """重复打开只唤起已有牌桌，保留这一次的选择。"""
+        if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
+            self.tarot_win.deiconify()
+            self.tarot_win.lift()
+            return
+        tarot_start_download()
+        self.tarot_table = TarotTable(self)
+        self.tarot_win = self.tarot_table.win
+
+    def tarot_submit(self, question=None):
+        """截图钩子：填写问题并确认；洗牌结束后进入选牌。"""
+        if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
+            self.tarot_table.submit(question)
+
+    def tarot_pick(self, i):
+        """截图钩子：选铺牌中的第 i 张（从 0 开始）；再点一次撤回。"""
+        if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
+            self.tarot_table.pick(i)
+
+    def tarot_hover(self, i):
+        """截图钩子：突出第 i 张待选牌（从 0 开始）；None 清除悬停。"""
+        if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
+            self.tarot_table.set_hover(i)
+
+    def tarot_confirm(self):
+        """截图钩子：选满三张后依次翻牌。"""
+        if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
+            self.tarot_table.confirm()
 
     # ---------- 设置窗口 ----------
     def open_settings(self):
