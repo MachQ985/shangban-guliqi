@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.7.0"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.8.0"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -59,6 +59,10 @@ PALETTES = {
         "hairline": "#ececee", "track": "#e8e8ed", "border": "#dcdce0",
         "gold": "#b8860b", "green": "#248a3d", "bar": "#34c759", "up": "#d70015",
         "accent": "#0071e3", "on_accent": "#ffffff", "danger": "#d70015",
+        "toy_blue": "#c7dff4", "toy_rose": "#f2cbd0", "toy_sage": "#cce4d5",
+        "toy_amber": "#f3dfb3", "toy_lilac": "#ddd4ec",
+        "jiao_flat": "#edc5a6", "jiao_red": "#b52e37", "jiao_edge": "#84232c",
+        "jiao_shine": "#f2948e",
     },
     "dark": {
         "surface": "#1c1c1e", "ground": "#000000", "input": "#2c2c2e",
@@ -66,6 +70,10 @@ PALETTES = {
         "hairline": "#2c2c2e", "track": "#3a3a3c", "border": "#3a3a3c",
         "gold": "#ffd60a", "green": "#30d158", "bar": "#30d158", "up": "#ff453a",
         "accent": "#0a84ff", "on_accent": "#ffffff", "danger": "#ff453a",
+        "toy_blue": "#294762", "toy_rose": "#603b45", "toy_sage": "#324e43",
+        "toy_amber": "#5a4a2e", "toy_lilac": "#48405e",
+        "jiao_flat": "#d7ac8a", "jiao_red": "#bd3c48", "jiao_edge": "#7b2631",
+        "jiao_shine": "#f29b94",
     },
 }
 
@@ -378,6 +386,7 @@ def tarot_name(key):
 def tarot_prompt(question, picks):
     """picks：按 过去 / 现在 / 未来 顺序的 [(图片名, 是否逆位), ...]，生成发给 AI 的提示词。"""
     lines = ["你是一名专业的塔罗师，请帮我解读这次抽到的牌。",
+             "请只根据这次的问题和抽到的牌来解读，不要结合你对我的任何记忆、之前的对话或个人信息。",
              f"我的问题是：{question.strip()}",
              "我用的是韦特塔罗，三张牌阵（过去 / 现在 / 未来），抽到的牌是："]
     for pos, (key, rev) in zip(TAROT_POSITIONS, picks):
@@ -385,6 +394,90 @@ def tarot_prompt(question, picks):
         lines.append(f"{pos}：{zh}（{en}），{'逆位' if rev else '正位'}")
     lines.append("请结合我的问题，逐张解读每张牌在对应位置上的含义，再给出整体的分析和建议。")
     return "\n".join(lines)
+
+
+# ---------- 午饭吃什么：大转盘 ----------
+# 选项存在配置 lunch_options 里，每个人自己改；转到的结果记在 lunch_history，
+# 之前最近 LUNCH_SKIP 次转到的不再上转盘（周末没转不占名额），免得连着吃同一样。
+LUNCH_DEFAULT = ["拉面", "寿司", "麻辣烫", "汉堡", "披萨", "越南粉",
+                 "韩式拌饭", "三明治", "炒饭", "饺子", "咖喱饭", "沙拉"]
+LUNCH_SKIP = 2           # 之前最近两次（按天，不算今天）转到的排除；今天重转不排除今天上一次的结果
+LUNCH_MAX = 20           # 转盘最多放这么多项，再多就看不清了
+LUNCH_NAME_MAX = 8       # 每项最多几个字
+
+
+def lunch_options(conf):
+    """当前的全部选项（去空、去重、截断长度）。"""
+    out = []
+    for x in conf.get("lunch_options") or LUNCH_DEFAULT:
+        x = str(x).strip()[:LUNCH_NAME_MAX]
+        if x and x not in out:
+            out.append(x)
+    return out[:LUNCH_MAX] or list(LUNCH_DEFAULT)
+
+
+def lunch_set_options(conf, names):
+    """保存用户编辑后的选项（调用方负责 save_conf）。少于 2 项就恢复默认。"""
+    conf["lunch_options"] = lunch_options({"lunch_options": names})
+    if len(conf["lunch_options"]) < 2:
+        conf["lunch_options"] = list(LUNCH_DEFAULT)
+    return conf["lunch_options"]
+
+
+def lunch_recent(conf, today=None):
+    """要排除的选项：今天之前最近 LUNCH_SKIP 天的结果（每天只记一条）。"""
+    today = (today or dt.date.today()).isoformat()
+    past = sorted((h for h in conf.get("lunch_history", []) if h.get("day", "") < today),
+                  key=lambda h: h["day"])
+    return {h["pick"] for h in past[-LUNCH_SKIP:]}
+
+
+def lunch_candidates(conf, today=None):
+    """这次上转盘的选项：全部选项去掉最近吃过的；剩下不到 2 项就不排除。
+    返回 (上转盘的, 被排除的)。"""
+    opts = lunch_options(conf)
+    skip = lunch_recent(conf, today)
+    cand = [x for x in opts if x not in skip]
+    if len(cand) < 2:
+        return opts, []
+    return cand, [x for x in opts if x in skip]
+
+
+def lunch_spin(cands):
+    """抽中第几项（等概率）。界面拿这个下标去算转盘停在哪。"""
+    return random.SystemRandom().randrange(len(cands))
+
+
+def lunch_record(conf, pick, today=None):
+    """记下今天转到的（今天再转会覆盖），只留最近 14 条。调用方负责 save_conf。"""
+    today = (today or dt.date.today()).isoformat()
+    hist = [h for h in conf.get("lunch_history", []) if h.get("day") != today]
+    hist.append({"day": today, "pick": pick})
+    conf["lunch_history"] = hist[-14:]
+
+
+def lunch_today(conf, today=None):
+    """今天已经转到的午饭，没转过返回 None。"""
+    today = (today or dt.date.today()).isoformat()
+    return next((h["pick"] for h in conf.get("lunch_history", []) if h.get("day") == today), None)
+
+
+# ---------- 赛博圣杯（掷筊） ----------
+# 两片筊杯各自随机落成“平面朝上”或“凸面朝上”：一平一凸是圣杯（1/2），
+# 两平是笑杯（1/4），两凸是阴杯（1/4）。
+JIAO_RESULTS = {
+    "圣杯": "一平一凸，神明应允。",
+    "笑杯": "两面皆平，神明笑而不答，可以换个问法再问。",
+    "阴杯": "两面皆凸，神明不允，此事暂缓。",
+}
+JIAO_STREAK = 3  # “连续三圣杯”模式：连掷三次都是圣杯才算真正应允
+
+
+def jiao_throw():
+    """掷一次：返回 (左片平面朝上?, 右片平面朝上?, 结果名)。"""
+    rnd = random.SystemRandom()
+    a, b = rnd.random() < .5, rnd.random() < .5
+    return a, b, ("圣杯" if a != b else "笑杯" if a else "阴杯")
 
 
 # ---------- 配置 ----------
@@ -1072,6 +1165,116 @@ PET_TOP = 16                                  # 猫窗口上方多留的高度�
 PET_CAT_HEIGHT = 46                           # 自动处理时，平时坐姿缩放到大约这么高
 PET_KEY = "#ff00fe"                           # 读图时用这个颜色标记透明像素
 PET_FPS_MS = 250
+
+# ---------- 桌宠：给 AI 画素材用的提示词（设置 → 宠物 → 复制提示词） ----------
+# (批次标题, [(文件名, 画什么), ...])；和 PET_STATES 一一对应，改动作时两边一起改
+PET_AI_BATCHES = [
+    ("第一批：必需和常用（先画这批就能用）", [
+        ("idle", "安静地端坐，正面看着前方（最重要，后面所有图的大小和位置都以它为准）"),
+        ("eat", "低头吃碗里的食物"),
+        ("play", "抬起前爪扑逗猫棒"),
+        ("sleep", "蜷成一团闭眼睡觉"),
+        ("happy", "眯眼微笑，尾巴竖起"),
+        ("click", "被戳了一下，吓一跳（只要 1 帧）"),
+        ("hungry", "可怜巴巴地望着你，旁边一个空碗"),
+        ("work", "趴在一台小笔记本电脑前打字"),
+        ("rain", "撑着一把小伞，有雨点"),
+        ("snow", "头上和身上落着雪花"),
+        ("cold", "缩成一团发抖"),
+        ("hot", "热得吐舌头、摊开"),
+        ("sunny", "晒太阳，眯眼很舒服"),
+    ]),
+    ("第二批：平时的小动作（可选）", [
+        ("loaf", "前爪揣在身下，趴成面包"),
+        ("look", "左右张望"),
+        ("knead", "前爪交替踩奶"),
+        ("nap", "侧躺打盹"),
+        ("tailwag", "坐着慢慢摇尾巴"),
+        ("upside", "四脚朝天躺着"),
+        ("curious", "歪头好奇"),
+        ("liquid", "软成一摊，像液体"),
+        ("pancake", "整个趴平成一张饼"),
+        ("rub", "侧身蹭过来撒娇"),
+        ("groom", "舔爪子洗脸"),
+        ("yawn", "张大嘴打哈欠"),
+        ("stretch", "前身压低伸懒腰"),
+        ("scratch", "用后腿挠耳朵"),
+        ("earflick", "抖一下耳朵"),
+        ("lickbelly", "低头舔肚皮"),
+        ("licktail", "抱着尾巴舔"),
+        ("shake", "抖身体，毛炸开"),
+        ("drink", "低头喝碗里的水"),
+        ("hairball", "弓背吐毛球"),
+    ]),
+    ("第三批：互动动作（可选，缺了会用相近的动作代替）", [
+        ("pet", "被摸头，眯眼享受"),
+        ("belly", "翻出肚皮"),
+        ("annoyed", "不耐烦，甩尾巴"),
+        ("angry", "生气，耳朵向后压成飞机耳"),
+        ("carried", "被拎起来，四肢悬空"),
+        ("land", "落地，稍微下蹲"),
+        ("roll", "在地上打滚"),
+        ("punch", "挥出一记猫猫拳"),
+        ("drowsy", "犯困，头一点一点"),
+        ("wake", "猛地惊醒，眼睛睁大"),
+        ("beg", "立起来讨食"),
+        ("full", "吃饱了舔嘴"),
+        ("excited", "兴奋地跳起来"),
+        ("sad", "委屈，耳朵耷拉"),
+        ("scared", "害怕，全身炸毛"),
+        ("twitch", "睡着时爪子抽动"),
+        ("upsleep", "四脚朝天睡觉"),
+        ("watchl", "盯着画面左边"),
+        ("watchr", "盯着画面右边"),
+        ("swatl", "向左边伸爪拍"),
+        ("swatr", "向右边伸爪拍"),
+    ]),
+]
+PET_AI_ITEMS = [
+    ("snack", "一小把鱼干零食"), ("freeze_dried", "一块冻干"),
+    ("can", "一个打开的罐头"), ("wand", "一根带羽毛的逗猫棒"),
+    ("fx_heart", "红色爱心"), ("fx_question", "问号"), ("fx_exclaim", "感叹号"),
+    ("fx_anger", "生气的十字青筋符号"), ("fx_note", "音符"), ("fx_sweat", "一滴汗"),
+]
+
+
+def pet_ai_prompt():
+    """复制给能画图的 AI（比如 ChatGPT）的整段提示词，和照片一起发。"""
+    lines = [
+        "你是一名像素画师。请参考我上传的宠物照片，为一个桌面小宠物程序画一整套动作素材。",
+        "",
+        "【第一步：先确认长相，先别画】",
+        "仔细看照片，用几句话总结这只宠物的外观：种类和体型、毛色和花纹分布（哪个部位是什么颜色）、"
+        "眼睛颜色、耳朵和尾巴的特点。等我确认或补充后再开始画；之后每一张都必须保持这些特征。",
+        "",
+        "【画风和画布：每一张都一样】",
+        "- 像素风（pixel art），Q 版大头小身子，轮廓清晰，全套颜色控制在 16 色以内。",
+        "- 正方形画布，纯绿色 #00FF00 背景，背景里不要有任何别的东西。",
+        "- 宠物全身入画、水平居中；脚底（或身体着地的部分）始终踩在画面高度约 85% 的同一条线上，"
+        "端坐时头顶在约 15% 处。",
+        "- 所有动作里宠物的大小保持一致，不要因为动作不同而放大或缩小，也不要改变镜头角度。",
+        "- 宠物身上不要用和背景一样的亮绿色。",
+        "- 不要文字、水印、边框、地面和阴影；睡觉的“Zz”用小气泡代替。",
+        "- 每张图只画一个动作的一帧。",
+        "",
+        "【要画的动作】",
+        "按顺序画，冒号前是文件名。除非另有说明，每个动作画 2 帧（文件名 _1、_2），"
+        "两帧之间只有很小的变化（呼吸起伏、眨眼、尾巴摆动、爪子换位），像简单的循环动画。",
+    ]
+    for title, items in PET_AI_BATCHES:
+        lines += ["", title]
+        lines += [f"- {key}：{what}" for key, what in items]
+    lines += ["", "道具和头顶特效（各 1 张，同样绿底、像素风、居中、不用分帧，文件名不加 _1）："]
+    lines += [f"- {key}：{what}" for key, what in PET_AI_ITEMS]
+    lines += [
+        "",
+        "【交付方式】",
+        "- 如果你能运行代码：每画完一批，把图片按上面的文件名存成 PNG（不要 JPG），"
+        "例如 idle_1.png、idle_2.png、snack.png，打包成 zip 给我下载。",
+        "- 如果不能运行代码：每次只画一张，并告诉我这张要保存成什么文件名（PNG），我说“继续”再画下一张。",
+        "- 如果这只宠物不是猫，猫特有的动作（踩奶、吐毛球、液体猫等）换成这种动物相近的动作，文件名不变。",
+    ]
+    return "\n".join(lines)
 
 
 def _pet_scan(src):
@@ -2550,6 +2753,480 @@ class TarotTable:
         self.later(1400, lambda: self.copy_btn.itemconfigure("text", text="复制"))
 
 
+class ToyWindow:
+    """小玩具共用的窗口、屏幕边界和动画回调管理。"""
+
+    def __init__(self, app, key, title, caption, heading):
+        self.app, self.p, self.s, self.key = app, app.p, app.ui_scale(), key
+        self.state, self.result, self.closed, self.jobs = "ready", None, False, set()
+        self.win = win = tk.Toplevel(app.root, bg=self.p["ground"])
+        setattr(app, key + "_win", win)
+        win.title(title)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win.protocol("WM_DELETE_WINDOW", self.close)
+        win.bind("<Escape>", lambda _e: self.close())
+        win.bind("<Destroy>", self.destroyed, add="+")
+        win_dark_titlebar(win, app.dark)
+        self.width = min(self.px(480), int(win.winfo_screenwidth() * .86))
+        self.w = self.width / self.s - 40
+        self.viewport = tk.Canvas(win, width=self.width, bg=self.p["ground"],
+                                  bd=0, highlightthickness=0)
+        self.viewport.pack(side="left", fill="both", expand=True)
+        self.scroll = TarotScrollbar(win, self.p, self.s, self.viewport.yview)
+        self.viewport.configure(yscrollcommand=self.scroll.set)
+        self.body = tk.Frame(self.viewport, bg=self.p["ground"], padx=self.px(20), pady=self.px(18))
+        self.viewport.create_window(0, 0, window=self.body, anchor="nw", width=self.width)
+        self.body.bind("<Configure>", lambda _e: self.viewport.configure(
+            scrollregion=self.viewport.bbox("all")))
+        win.bind("<MouseWheel>", self.wheel)
+        win.bind("<Button-4>", lambda _e: self.viewport.yview_scroll(-2, "units"))
+        win.bind("<Button-5>", lambda _e: self.viewport.yview_scroll(2, "units"))
+        self.label(self.body, caption, 9, "text3").pack(anchor="w")
+        self.heading = self.label(self.body, heading, 21, "text", True)
+        self.heading.pack(anchor="w", pady=(self.px(5), self.px(14)))
+
+    def px(self, value):
+        return max(1, round(value * self.s))
+
+    def label(self, parent, text, size=10, color="text2", bold=False):
+        return tk.Label(parent, text=text, bg=parent["bg"], fg=self.p[color],
+                        font=(FONT, size, "bold" if bold else "normal"), justify="left",
+                        anchor="w", wraplength=self.px(self.w - 8))
+
+    def button(self, parent, text, action, primary=True):
+        button = PillButton(parent, text, self.p["accent" if primary else "track"],
+                            self.p["on_accent" if primary else "text"], action,
+                            parent["bg"], (FONT, 10))
+        button._action = action
+        return button
+
+    def enable(self, button, enabled):
+        button.command = button._action if enabled else lambda: None
+        button.bg = self.p["accent" if enabled else "track"]
+        button.itemconfigure(button.shape, fill=button.bg)
+        button.itemconfigure("text", fill=self.p["on_accent" if enabled else "text3"])
+        button.configure(cursor="hand2" if enabled else "arrow")
+
+    def later(self, ms, action):
+        if self.closed:
+            return
+        job = None
+
+        def run():
+            self.jobs.discard(job)
+            if not self.closed:
+                action()
+        job = self.win.after(ms, run)
+        self.jobs.add(job)
+
+    def animate(self, duration, frame, finish):
+        import time
+        started = time.perf_counter()
+
+        def step():
+            t = min(1, (time.perf_counter() - started) * 1000 / duration)
+            frame(t)
+            if t < 1:
+                self.later(16, step)
+            else:
+                finish()
+        step()
+
+    def cancel_jobs(self):
+        for job in self.jobs:
+            try:
+                self.win.after_cancel(job)
+            except tk.TclError:
+                pass
+        self.jobs.clear()
+
+    def close(self):
+        if not self.closed:
+            self.closed, self.state = True, "closed"
+            self.cancel_jobs()
+            self.win.destroy()
+
+    def destroyed(self, event):
+        if event.widget == self.win:
+            self.closed, self.state = True, "closed"
+            self.cancel_jobs()
+            if getattr(self.app, self.key + "_win", None) is self.win:
+                setattr(self.app, self.key + "_win", None)
+
+    def wheel(self, event):
+        # 编辑框自行处理滚轮，避免同时带动整张页面。
+        if isinstance(event.widget, tk.Text):
+            return
+        self.viewport.yview_scroll(-2 if event.delta > 0 else 2, "units")
+
+    def fit(self):
+        self.win.update_idletasks()
+        h = min(self.body.winfo_reqheight(), int(self.win.winfo_screenheight() * .84))
+        overflow = self.body.winfo_reqheight() > h
+        if overflow:
+            self.scroll.pack(side="right", fill="y")
+        else:
+            self.scroll.pack_forget()
+        width = self.width + (self.scroll.winfo_reqwidth() if overflow else 0)
+        x = self.app.root.winfo_x() - width - self.px(12)
+        if x < 0:
+            x = self.app.root.winfo_x() + self.app.root.winfo_width() + self.px(12)
+        x = max(0, min(x, self.win.winfo_screenwidth() - width))
+        y = max(0, min(self.app.root.winfo_y(), self.win.winfo_screenheight() - h - self.px(48)))
+        self.win.geometry(f"{width}x{h}+{x}+{y}")
+        self.viewport.yview_moveto(0)
+
+    def snapshot(self):
+        return {"state": self.state, "result": self.result}
+
+
+class LunchWheel(ToyWindow):
+    """随机结果只由底层决定，转盘动画负责准确停到对应扇区。"""
+
+    def __init__(self, app):
+        super().__init__(app, "lunch", "午饭吃什么", "午间休息 · 给选择放个假", "今天中午，转个主意")
+        self.angle, self.winner = 0.0, None
+        self.candidates, self.excluded = lunch_candidates(app.conf)
+        self.result = lunch_today(app.conf)
+        self.play_page = tk.Frame(self.body, bg=self.p["ground"])
+        self.play_page.pack(fill="x")
+        self.cv = tk.Canvas(self.play_page, width=self.px(self.w), height=self.px(370),
+                            bg=self.p["surface"], highlightthickness=1,
+                            highlightbackground=self.p["border"], bd=0)
+        self.cv.pack(fill="x")
+        self.result_label = self.label(self.play_page,
+            f"今天中午：{self.result}" if self.result else "把纠结，交给这一转", 19, "text", True)
+        self.result_label.pack(fill="x", pady=(self.px(14), self.px(5)))
+        self.skip_label = self.label(self.play_page, "", 9, "text3")
+        self.skip_label.pack(fill="x", pady=(0, self.px(14)))
+        row = tk.Frame(self.play_page, bg=self.p["ground"])
+        row.pack(fill="x")
+        self.edit_button = self.button(row, "编辑选项", self.edit, False)
+        self.edit_button.pack(side="left")
+        self.spin_button = self.button(row, "转！", self.spin)
+        self.spin_button.pack(side="right")
+        self.edit_page = tk.Frame(self.body, bg=self.p["ground"])
+        self.label(self.edit_page, f"每行一项，2–{LUNCH_MAX} 项；每项最多 {LUNCH_NAME_MAX} 个字。", 10).pack(anchor="w")
+        area = tk.Frame(self.edit_page, bg=self.p["surface"], highlightthickness=1,
+                        highlightbackground=self.p["border"])
+        area.pack(fill="x", pady=self.px(12))
+        self.editor = tk.Text(area, height=10, width=1, font=(FONT, 11), wrap="none",
+                              bg=self.p["surface"], fg=self.p["text"], relief="flat", bd=0,
+                              insertbackground=self.p["text"], padx=self.px(12), pady=self.px(10),
+                              selectbackground=self.p["accent"], selectforeground=self.p["on_accent"])
+        editor_scroll = TarotScrollbar(area, self.p, self.s, self.editor.yview)
+        editor_scroll.pack(side="right", fill="y")
+        self.editor.configure(yscrollcommand=editor_scroll.set)
+        self.editor.pack(side="left", fill="both", expand=True)
+        self.edit_hint = self.label(self.edit_page, "修改后点「保存」，才会更新转盘。", 9, "text3")
+        self.edit_hint.pack(fill="x", pady=(0, self.px(12)))
+        actions = tk.Frame(self.edit_page, bg=self.p["ground"])
+        actions.pack(fill="x")
+        self.button(actions, "恢复默认", self.restore_defaults, False).pack(side="left")
+        self.button(actions, "保存", self.save_options).pack(side="right")
+        self.button(actions, "取消", self.end_edit, False).pack(side="right", padx=self.px(8))
+        self.win.bind("<Return>", self.enter)
+        self.draw()
+        self.update_skip()
+        self.fit()
+
+    def enter(self, _event):
+        if self.state == "ready":
+            self.spin()
+            return "break"
+
+    def update_skip(self):
+        self.skip_label.configure(text=("最近吃过，今天先跳过：" + "、".join(self.excluded)
+                                        if self.excluded else "每项机会相同；最近吃过的会自动跳过。"))
+
+    def draw(self):
+        import math
+        cv, s = self.cv, self.s
+        cv.delete("all")
+        cx, cy, r = self.w / 2, 190, min(162, self.w / 2 - 18)
+        step = 360 / len(self.candidates)
+        colors = ("toy_blue", "toy_rose", "toy_sage", "toy_amber", "toy_lilac")
+        for i, name in enumerate(self.candidates):
+            a = self.angle + i * step
+            cv.create_arc((cx-r)*s, (cy-r)*s, (cx+r)*s, (cy+r)*s,
+                          start=a, extent=step + .1, style="pieslice", fill=self.p[colors[i % len(colors)]],
+                          outline=self.p["surface"], width=self.px(1))
+            mid = a + step / 2
+            theta = math.radians(mid)
+            radius = (25 + r) / 2 + 4  # 文字居中放在中心圆和外圈之间，长名字也不顶到边
+            # 径向文字利用扇区长度；20 项和八字名称也不会挤在圆周上。
+            label_angle = mid % 360
+            if 90 < label_angle < 270:
+                label_angle = (label_angle + 180) % 360
+            cv.create_text((cx + radius * math.cos(theta))*s, (cy - radius * math.sin(theta))*s,
+                           text=name, angle=label_angle, fill=self.p["text"],
+                           font=(FONT, 7 if len(name) >= 7 and len(self.candidates) > 14
+                                 else 8 if len(self.candidates) > 14 or len(name) >= 7 else 9, "bold"))
+            if i == self.winner:
+                cv.create_arc((cx-r)*s, (cy-r)*s, (cx+r)*s, (cy+r)*s,
+                              start=a, extent=step, style="pieslice", outline=self.p["accent"],
+                              fill="", width=self.px(3))
+        cv.create_oval((cx-25)*s, (cy-25)*s, (cx+25)*s, (cy+25)*s,
+                       fill=self.p["surface"], outline=self.p["border"], width=self.px(1))
+        cv.create_text(cx*s, cy*s, text="午饭", font=(FONT, 9, "bold"), fill=self.p["text2"])
+        # 顶部固定指针，Canvas 角度 90° 对应正上方。
+        tip = cy - r + 12
+        cv.create_polygon((cx-10)*s, (tip-24)*s, (cx+10)*s, (tip-24)*s, cx*s, tip*s,
+                          fill=self.p["text"], outline="")
+
+    def spin(self):
+        if self.state != "ready":
+            return
+        self.candidates, self.excluded = lunch_candidates(self.app.conf)
+        self.update_skip()
+        self.state, self.winner = "spinning", None
+        self.enable(self.spin_button, False)
+        self.edit_button.command = lambda: None
+        self.edit_button.configure(cursor="arrow")
+        self.result_label.configure(text="正在转，午饭马上有着落…")
+        index = lunch_spin(self.candidates)
+        step = 360 / len(self.candidates)
+        # 格内轻微偏移，始终留在该格中央 36% 的范围内，不会跨过分隔线。
+        target = 90 - (index + .5) * step + random.uniform(-.18, .18) * step
+        start = self.angle
+        distance = 6 * 360 + (target - start) % 360
+
+        def frame(t):
+            self.angle = start + distance * (1 - (1-t) ** 4)
+            self.draw()
+
+        def finish():
+            self.angle %= 360
+            self.winner, self.result = index, self.candidates[index]
+            self.state = "ready"
+            lunch_record(self.app.conf, self.result)
+            try:
+                save_conf(self.app.conf)
+                self.result_label.configure(text=f"今天中午：{self.result}")
+            except OSError:
+                self.result_label.configure(text=f"今天中午：{self.result}（配置未能写入）")
+            self.app.refresh_lunch_entry()
+            self.enable(self.spin_button, True)
+            self.edit_button.command = self.edit_button._action
+            self.edit_button.configure(cursor="hand2")
+            self.draw()
+            pet = getattr(self.app, "pet", None)
+            if pet and pet.win is not None:
+                pet.play("excited", 2, "happy", 1)
+        self.animate(3600, frame, finish)
+
+    def edit(self):
+        if self.state != "ready":
+            return
+        self.state = "editing"
+        self.play_page.pack_forget()
+        self.heading.configure(text="把喜欢的，都放上转盘")
+        self.editor.delete("1.0", "end")
+        self.editor.insert("1.0", "\n".join(lunch_options(self.app.conf)))
+        self.edit_hint.configure(text="修改后点「保存」，才会更新转盘。", fg=self.p["text3"])
+        self.edit_page.pack(fill="x")
+        self.editor.focus_set()
+        self.fit()
+
+    def restore_defaults(self):
+        self.editor.delete("1.0", "end")
+        self.editor.insert("1.0", "\n".join(LUNCH_DEFAULT))
+        self.edit_hint.configure(text="已填入默认选项；点「保存」应用。", fg=self.p["text3"])
+
+    def save_options(self):
+        names = [x.strip() for x in self.editor.get("1.0", "end-1c").splitlines() if x.strip()]
+        if not 2 <= len(names) <= LUNCH_MAX:
+            message = f"请填写 2–{LUNCH_MAX} 项，每行一项。"
+        elif any(len(x) > LUNCH_NAME_MAX for x in names):
+            message = f"每项最多 {LUNCH_NAME_MAX} 个字，请缩短名称。"
+        elif len(set(names)) != len(names):
+            message = "有重复的选项，请删掉重复行。"
+        else:
+            lunch_set_options(self.app.conf, names)
+            try:
+                save_conf(self.app.conf)
+            except OSError:
+                self.edit_hint.configure(text="配置未能写入，请重试保存。", fg=self.p["danger"])
+                return
+            self.end_edit()
+            return
+        self.edit_hint.configure(text=message, fg=self.p["danger"])
+
+    def end_edit(self):
+        self.state, self.winner, self.angle = "ready", None, 0.0
+        self.candidates, self.excluded = lunch_candidates(self.app.conf)
+        self.edit_page.pack_forget()
+        self.play_page.pack(fill="x")
+        self.heading.configure(text="今天中午，转个主意")
+        self.update_skip()
+        self.draw()
+        self.fit()
+
+    def snapshot(self):
+        return dict(super().snapshot(), candidates=list(self.candidates), excluded=list(self.excluded),
+                    winner=self.winner, angle=self.angle % 360)
+
+
+class JiaoTable(ToyWindow):
+    """红色月牙筊杯；只显示传统结果，不增加解读。"""
+
+    def __init__(self, app):
+        super().__init__(app, "jiao", "赛博圣杯 · 掷筊", "一问一掷 · 静候杯落", "把问题，轻轻放下")
+        self.faces, self.count, self.streak_mode = (True, False), 0, False
+        self.question = tk.StringVar(master=self.win)
+        self.label(self.body, "你想问什么？（可不填）", 10).pack(anchor="w")
+        self.entry = tk.Entry(self.body, textvariable=self.question, font=(FONT, 11),
+                              relief="flat", bg=self.p["surface"], fg=self.p["text"],
+                              insertbackground=self.p["text"], highlightthickness=1,
+                              highlightbackground=self.p["border"], highlightcolor=self.p["accent"])
+        self.entry.pack(fill="x", ipady=self.px(8), pady=(self.px(6), self.px(12)))
+        self.cv = tk.Canvas(self.body, width=self.px(self.w), height=self.px(300),
+                            bg=self.p["surface"], bd=0, highlightthickness=1,
+                            highlightbackground=self.p["border"])
+        self.cv.pack(fill="x")
+        self.result_label = self.label(self.body, "心有所问，掷杯听回应", 20, "text", True)
+        self.result_label.pack(fill="x", pady=(self.px(14), self.px(5)))
+        self.meaning = self.label(self.body, "一平一凸为圣杯，两平为笑杯，两凸为阴杯。", 10)
+        self.meaning.pack(fill="x")
+        self.progress = tk.Canvas(self.body, width=self.px(self.w), height=self.px(44),
+                                  bg=self.p["ground"], highlightthickness=0)
+        self.progress.pack(fill="x", pady=(self.px(4), self.px(8)))
+        row = tk.Frame(self.body, bg=self.p["ground"])
+        row.pack(fill="x")
+        self.mode_var = tk.BooleanVar(master=self.win, value=False)
+        self.mode_button = tk.Checkbutton(row, text="连续三圣杯", variable=self.mode_var,
+            command=lambda: self.set_streak(self.mode_var.get()), font=(FONT, 10),
+            bg=self.p["ground"], fg=self.p["text2"], activebackground=self.p["ground"],
+            activeforeground=self.p["text"], selectcolor=self.p["input"],
+            highlightthickness=0, bd=0, cursor="hand2")
+        self.mode_button.pack(side="left")
+        self.throw_button = self.button(row, "掷杯", self.throw)
+        self.throw_button.pack(side="right")
+        self.win.bind("<Return>", lambda _e: self.throw())
+        self.draw()
+        self.draw_progress()
+        self.fit()
+
+    def cup(self, x, y, flat, tilt, squash=1):
+        import math
+        size = min(1, self.w / 400)
+        angle = math.radians(tilt)
+
+        def points(coords):
+            out = []
+            for px, py in coords:
+                px, py = px * squash * size, (py - 22) * size
+                out.extend(((x + px*math.cos(angle) - py*math.sin(angle))*self.s,
+                            (y + px*math.sin(angle) + py*math.cos(angle))*self.s))
+            return out
+        arc = [math.pi * i / 32 for i in range(33)]
+        outline = [(66*math.cos(t), 52*math.sin(t)) for t in arc] + [
+            (66*math.cos(t), 12*math.sin(t)) for t in reversed(arc)]
+        self.cv.create_polygon(points(outline), smooth=True,
+            fill=self.p["jiao_flat" if flat else "jiao_red"],
+            outline=self.p["jiao_edge"], width=self.px(3))
+        if flat:
+            for depth in (22, 31, 40):
+                grain = [(58*math.cos(t), depth*math.sin(t)) for t in arc[4:-4]]
+                self.cv.create_line(points(grain), fill=self.p["jiao_edge"], width=1,
+                                    smooth=True, capstyle="round")
+        else:
+            shine = [(53*math.cos(t), 40*math.sin(t)) for t in arc[5:24]]
+            self.cv.create_line(points(shine), fill=self.p["jiao_shine"], width=self.px(3),
+                                smooth=True, capstyle="round")
+
+    def draw(self, t=None):
+        import math
+        self.cv.delete("all")
+        for i, flat in enumerate(self.faces):
+            direction = -1 if i == 0 else 1
+            x, y, tilt, squash = self.w * (.31 if i == 0 else .69), 178, direction*18, 1
+            if t is not None:
+                lift = 100*math.sin(math.pi*min(1, t/.85)) if t < .85 else 8*math.sin((t-.85)/.15*math.pi)
+                y -= lift
+                x += direction*18*math.sin(math.pi*t)
+                tilt += direction*330*math.sin(math.pi*t)
+                squash = max(.12, abs(math.cos(t*math.pi*5))) if t < .85 else 1
+                flat = (int(t*10+i) % 2 == 0) if t < .85 else flat
+            shadow = min(50, self.w*.11)
+            self.cv.create_oval((x-shadow)*self.s, 212*self.s, (x+shadow)*self.s,
+                                223*self.s, fill=self.p["input"], outline="")
+            self.cup(x, y, flat, tilt, squash)
+            self.cv.create_text(self.w*(.31 if i == 0 else .69)*self.s, 263*self.s,
+                text="翻转中…" if t is not None else ("平面朝上 · 切面" if flat else "凸面朝上 · 红漆"),
+                font=(FONT, 9), fill=self.p["text3"])
+
+    def draw_progress(self):
+        cv, s = self.progress, self.s
+        cv.delete("all")
+        if not self.streak_mode:
+            return
+        for i in range(JIAO_STREAK):
+            x = 8 + i*24
+            cv.create_oval(x*s, 15*s, (x+9)*s, 24*s,
+                           fill=self.p["accent" if i < self.count else "track"], outline="")
+        cv.create_text(88*s, 20*s, anchor="w", text=f"连续圣杯 {self.count}/{JIAO_STREAK}",
+                        font=(FONT, 9), fill=self.p["text2"])
+
+    def set_streak(self, enabled):
+        if self.state == "throwing":
+            self.mode_var.set(self.streak_mode)
+            return
+        enabled = bool(enabled)
+        self.mode_var.set(enabled)
+        if enabled != self.streak_mode:
+            self.streak_mode, self.count = enabled, 0
+            self.result = None
+            self.result_label.configure(text="连得三圣杯，方为应允" if enabled else "心有所问，掷杯听回应")
+            self.meaning.configure(text="遇笑杯或阴杯，连续进度重新开始。" if enabled else
+                                   "一平一凸为圣杯，两平为笑杯，两凸为阴杯。")
+        self.draw_progress()
+        self.fit()
+
+    def throw(self):
+        if self.state != "ready":
+            return
+        if self.count == JIAO_STREAK:
+            self.count = 0
+        self.state, self.result = "throwing", None
+        # 一次只调用一次底层，正反面和结果来自同一组随机值。
+        a, b, result = jiao_throw()
+        self.faces = (a, b)
+        self.entry.configure(state="disabled")
+        self.mode_button.configure(state="disabled")
+        self.enable(self.throw_button, False)
+        self.result_label.configure(text="杯起，静候落定")
+        self.meaning.configure(text="")
+        self.draw_progress()
+
+        def finish():
+            self.state, self.result = "ready", result
+            self.result_label.configure(text=result)
+            explanation = JIAO_RESULTS[result]
+            if self.streak_mode:
+                self.count = self.count + 1 if result == "圣杯" else 0
+                if self.count == JIAO_STREAK:
+                    self.result_label.configure(text="三圣杯，神明应允")
+                elif result == "圣杯":
+                    explanation += f" 已连续 {self.count} 次，再掷一次。"
+                else:
+                    explanation += " 三圣杯未成，连续进度已清零。"
+            self.meaning.configure(text=explanation)
+            self.entry.configure(state="normal")
+            self.mode_button.configure(state="normal")
+            self.enable(self.throw_button, True)
+            self.draw()
+            self.draw_progress()
+            self.fit()
+        self.animate(1280, lambda t: self.draw(t), finish)
+
+    def snapshot(self):
+        return dict(super().snapshot(), faces=tuple(self.faces), streak_mode=self.streak_mode,
+                    streak=self.count, complete=self.count == JIAO_STREAK,
+                    question=self.question.get() if not self.closed else "")
+
+
 class Floater:
     def __init__(self):
         self.conf = load_conf()
@@ -2694,31 +3371,35 @@ class Floater:
             self.sun_icons.append(cv)
             self.sun_labels.append(lb)
 
-        # 两个入口独占一行，用正常布局给天气和日落时间留足空间。
+        # 四个入口分成两行，两列共享标题和操作的对齐位置，不占用天气空间。
         fb = tk.Frame(self.frame, **S)
         fb.pack(fill="x", pady=(8, 0))
-        tcol = tk.Frame(fb, cursor="hand2", **S)
-        tcol.pack(side="right")
-        fcol = tk.Frame(fb, cursor="hand2", **S)
-        fcol.pack(side="left")
-        self.tarot_title = tk.Label(tcol, text="塔罗牌", fg=p["text2"], font=(FONT, 9),
-                                    cursor="hand2", **S)
-        self.tarot_title.pack(side="left")
-        self.tarot_lv = tk.Label(tcol, text="抽牌 ›", fg=p["accent"], font=(FONT, 10, "bold"),
-                                 cursor="hand2", **S)
-        self.tarot_lv.pack(side="left", padx=(4, 0))
-        for w in (tcol, self.tarot_title, self.tarot_lv):
-            w.bind("<ButtonRelease-1>", self.on_tarot_click)
-            w.bind("<Double-Button-1>", lambda _e: "break")
-        self.fortune_title = tk.Label(fcol, text="今日签", fg=p["text3"], font=(FONT, 9),
-                                      cursor="hand2", **S)
-        self.fortune_title.pack(side="left")
-        self.fortune_lv = tk.Label(fcol, text="", fg=p["accent"], font=(FONT, 11, "bold"),
-                                   cursor="hand2", **S)
-        self.fortune_lv.pack(side="left", padx=(4, 0))
-        for w in (fcol, self.fortune_title, self.fortune_lv):
-            w.bind("<ButtonRelease-1>", self.on_fortune_click)
-            w.bind("<Double-Button-1>", lambda _e: "break")  # 双击这里不切换迷你模式
+        fb.grid_columnconfigure(0, weight=1, uniform="入口")
+        fb.grid_columnconfigure(1, weight=1, uniform="入口")
+
+        def entrance(row, col, title, value, callback, size=10):
+            cell = tk.Frame(fb, cursor="hand2", **S)
+            cell.grid(row=row, column=col, sticky="nsew", padx=(0, 10) if col == 0 else 0,
+                      pady=(0, 4))
+            cell.grid_columnconfigure(0, minsize=round(40 * self.ui_scale()))
+            caption = tk.Label(cell, text=title, fg=p["text3"], font=(FONT, 9),
+                               cursor="hand2", anchor="w", **S)
+            caption.grid(row=0, column=0, sticky="nw")
+            action = tk.Label(cell, text=value, fg=p["accent"], font=(FONT, size, "bold"),
+                              cursor="hand2", anchor="w", justify="left",
+                              wraplength=round(70 * self.ui_scale()), **S)
+            action.grid(row=0, column=1, sticky="nw", padx=(4, 0))
+            for widget in (cell, caption, action):
+                widget.bind("<ButtonRelease-1>", callback)
+                widget.bind("<Double-Button-1>", lambda _e: "break")
+            return caption, action
+
+        self.fortune_title, self.fortune_lv = entrance(0, 0, "今日签", "", self.on_fortune_click, 11)
+        self.tarot_title, self.tarot_lv = entrance(0, 1, "塔罗牌", "抽牌 ›", self.on_tarot_click)
+        _, self.lunch_lv = entrance(1, 0, "午饭", "转一转 ›",
+                                   lambda e: self.on_toy_click(e, self.open_lunch))
+        entrance(1, 1, "圣杯", "掷一掷 ›", lambda e: self.on_toy_click(e, self.open_jiao))
+        self.refresh_lunch_entry()
         self.fortune_anim = False
         self.refresh_fortune()
 
@@ -2785,6 +3466,8 @@ class Floater:
         self.menu = tk.Menu(self.root, tearoff=0, font=(FONT, 10))
         self.menu.add_command(label="设置…", command=self.open_settings)
         self.menu.add_command(label="塔罗牌…", command=self.open_tarot)
+        self.menu.add_command(label="午饭吃什么…", command=self.open_lunch)
+        self.menu.add_command(label="赛博圣杯…", command=self.open_jiao)
         self.menu.add_command(label="迷你模式 / 完整模式", command=self.toggle_mini)
         self.autostart_var = tk.BooleanVar(value=autostart_enabled())
         self.menu.add_checkbutton(label="开机自启", variable=self.autostart_var,
@@ -2944,6 +3627,7 @@ class Floater:
         # 天气
         wx_tags = self.refresh_wx(c, st)
         self.refresh_fortune()
+        self.refresh_lunch_entry()
 
         # 鼓励语：状态变了立刻换，否则每 CHEER_EVERY_SEC 秒换一句；
         # 同一组洗牌后轮流出，整组说完才会重复。上班 / 没上班时混进天气相关的句子
@@ -3203,6 +3887,53 @@ class Floater:
         """截图钩子：选满三张后依次翻牌。"""
         if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
             self.tarot_table.confirm()
+
+    # ---------- 午饭转盘 / 赛博圣杯 ----------
+    def on_toy_click(self, event, action):
+        px, py = getattr(self, "_press", (event.x_root, event.y_root))
+        if abs(event.x_root - px) <= 4 and abs(event.y_root - py) <= 4:
+            action()
+
+    def refresh_lunch_entry(self):
+        pick = lunch_today(self.conf)
+        # 长名字截短，入口保持一行，不把悬浮窗撑高
+        self.lunch_lv.configure(text=(pick if len(pick) <= 5 else pick[:4] + "…") if pick
+                                else "转一转 ›")
+
+    def open_lunch(self):
+        if getattr(self, "lunch_win", None) and self.lunch_win.winfo_exists():
+            self.lunch_win.deiconify()
+            self.lunch_win.lift()
+            return
+        self.lunch_table = LunchWheel(self)
+
+    def lunch_spin_now(self):
+        if getattr(self, "lunch_win", None) and self.lunch_win.winfo_exists():
+            self.lunch_table.spin()
+
+    def lunch_edit(self):
+        if getattr(self, "lunch_win", None) and self.lunch_win.winfo_exists():
+            self.lunch_table.edit()
+
+    def open_jiao(self):
+        if getattr(self, "jiao_win", None) and self.jiao_win.winfo_exists():
+            self.jiao_win.deiconify()
+            self.jiao_win.lift()
+            return
+        self.jiao_table = JiaoTable(self)
+
+    def jiao_throw_now(self):
+        if getattr(self, "jiao_win", None) and self.jiao_win.winfo_exists():
+            self.jiao_table.throw()
+
+    def jiao_set_streak(self, enabled):
+        if getattr(self, "jiao_win", None) and self.jiao_win.winfo_exists():
+            self.jiao_table.set_streak(enabled)
+
+    def toy_state(self):
+        """截图与断言钩子：返回两个玩具各自的状态、结果和模式进度。"""
+        return {key: getattr(self, key + "_table").snapshot()
+                if getattr(self, key + "_table", None) else None for key in ("lunch", "jiao")}
 
     # ---------- 设置窗口 ----------
     def open_settings(self):
@@ -3483,16 +4214,31 @@ class Floater:
                    (FONT, 9)).pack(side="right")
         status.pack(side="right", padx=(0, 8))
         pet_status()
+
+        # 没有素材：复制一段提示词，连同照片发给能画图的 AI
+        fr = row(g, "AI 画素材")
+        copied = tk.Label(fr, text="", fg=p["green"], font=(FONT, 9), **S)
+
+        def copy_pet_prompt():
+            win.clipboard_clear()
+            win.clipboard_append(pet_ai_prompt())
+            copied.configure(text="已复制")
+            win.after(2000, lambda: copied.winfo_exists() and copied.configure(text=""))
+        PillButton(fr, "复制提示词", p["track"], p["text"], copy_pet_prompt, p["surface"],
+                   (FONT, 9)).pack(side="right")
+        copied.pack(side="right", padx=(0, 8))
         pet_group.hint.configure(text=chr(10).join([
-            "选一个放 PNG 图片的文件夹，按动作给文件命名：",
-            "必需：idle_1.png（平时）",
-            "常用：eat、play、sleep、happy、hungry、work…",
-            "完整的 50 多个动作名见 GitHub 首页“做自己的小猫”",
-            "多帧动画：idle_1、idle_2、idle_3…，缺的动作自动找替身",
-            "任意大小都行；透明或纯绿色背景最好，",
-            "会自动抠图、缩成像素风并对齐。",
-            "互动：点它、连戳、双击、拖着走、在它身上来回划（摸摸），",
-            "鼠标靠近它会盯着看；右键猫打开喂食面板。"]))
+            "没有素材？点“复制提示词”，连同照片",
+            "发给能画图的 AI（比如 ChatGPT）。",
+            "照片 3–6 张：正面全身坐姿（最重要）、",
+            "侧面全身、脸部特写、花纹明显的部位；",
+            "光线自然、不加滤镜，只拍这一只。",
+            "画好的 PNG 放进一个文件夹，点“导入素材…”。",
+            "必需 idle_1.png，缺的动作会自动找替身；",
+            "任意大小，绿底会自动抠掉、缩成像素风。",
+            "互动：点它、连戳、双击、拖着走，",
+            "在它身上来回划是摸摸，鼠标靠近会盯着看；",
+            "右键猫打开喂食面板。"]))
 
         # 底部：错误提示 + 按钮
         err = tk.Label(body, text="", fg=p["danger"], font=(FONT, 9), anchor="w",
