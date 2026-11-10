@@ -27,6 +27,9 @@ def main():
     code = data.decode("utf-8")
     compile(code, APP_FILE, "exec")  # 有语法错误就别发布
     version = re.search(r'^VERSION = "([\d.]+)"', code, re.M).group(1)
+    top = re.search(r'^CHANGELOG = \[\s*\("([\d.]+)"', code, re.M)
+    if not top or top.group(1) != version:
+        sys.exit(f"更新记录 CHANGELOG 最上面一条不是 v{version}，先写好这一版改了什么再发布")
 
     vpath = os.path.join(HERE, "version.json")
     old = json.load(open(vpath, encoding="utf-8")) if os.path.exists(vpath) else {}

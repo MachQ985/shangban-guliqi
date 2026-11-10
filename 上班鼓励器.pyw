@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.8.0"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.8.1"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -478,6 +478,72 @@ def jiao_throw():
     rnd = random.SystemRandom()
     a, b = rnd.random() < .5, rnd.random() < .5
     return a, b, ("圣杯" if a != b else "笑杯" if a else "阴杯")
+
+
+# ---------- 版本记录：发布新版时在最上面加一条（设置 → 其他 → 更新记录，右键菜单也能打开） ----------
+# (版本号, 日期, [这一版改了什么, ...])，新的在前
+CHANGELOG = [
+    ("1.8.1", "2026-11-10", [
+        "赛博圣杯的筊杯重画：胖弯月造型，有厚度、红漆高光和贴地阴影",
+        "掷杯动画更真实：抛起、空中翻转、错开落地，凸面朝上的那片会晃几下再停稳",
+        "悬浮窗顶部加了猫爪开关，点一下显示 / 隐藏桌宠",
+        "新增版本信息和更新记录（就是你现在看到的这个）",
+    ]),
+    ("1.8.0", "2026-11-10", [
+        "新增「午饭吃什么」大转盘：选项可以自己改，最近两次转到的自动跳过",
+        "新增「赛博圣杯」掷筊：圣杯 / 笑杯 / 阴杯，可开「连续三圣杯」模式",
+        "今日签、塔罗牌、午饭、圣杯的入口排成两行",
+        "设置 → 宠物 加了「复制提示词」：连同宠物照片发给 AI，就能画出整套桌宠素材",
+        "塔罗提示词加了一句：让 AI 不要结合对你的记忆来解读",
+    ]),
+    ("1.7.0", "2026-11-10", [
+        "新增塔罗牌：韦特塔罗 1909 原版 78 张，先写问题再洗牌，自己选过去 / 现在 / 未来三张",
+        "翻牌后生成提示词，一键复制去问 AI 解读",
+        "牌面第一次使用时自动下载（约 2 MB）",
+    ]),
+    ("1.6.1", "2026-11-06", [
+        "今日签新增一批赛博风签文",
+        "宜忌加了更多打工日常",
+    ]),
+    ("1.6.0", "2026-11-05", [
+        "桌宠动作扩充到 50 多个：揣手、踩奶、洗脸、伸懒腰、打滚等",
+        "新增互动：摸摸、连戳会生气、拖起来、双击打滚，鼠标靠近会盯着看",
+        "离开电脑会犯困，回来会惊醒；快下班会兴奋",
+    ]),
+    ("1.5.0", "2026-11-05", [
+        "新增桌宠：导入自己小猫的图片，它会趴在悬浮窗上",
+        "图片自动抠图、缩成像素风；跟着天气换动作",
+        "上班时长换零食，右键猫可以喂食、逗猫棒陪玩",
+    ]),
+    ("1.4.1", "2026-11-05", [
+        "设置窗口分成收入、时间、宠物、其他几页",
+    ]),
+    ("1.4.0", "2026-11-05", [
+        "新增税后估算：按 2026 年联邦和安省税率、CPP、EI 算到手金额",
+        "可以选税后、税前或现金（不预扣）",
+    ]),
+    ("1.3.1", "2026-11-05", [
+        "测试自动更新，没有功能变化",
+    ]),
+    ("1.3.0", "2026-11-05", [
+        "新增今日签：每人每天一签，有签文、打工指数和宜忌",
+    ]),
+    ("1.2.2", "2026-11-05", [
+        "日出日落改成线条小图标",
+    ]),
+    ("1.2.1", "2026-11-05", [
+        "新增日出日落时间",
+    ]),
+    ("1.2.0", "2026-11-05", [
+        "新增天气：现在、下班时、明天（加拿大环境部数据）",
+        "下班时可能下雨会提醒带伞",
+    ]),
+    ("1.1.0", "2026-11-05", [
+        "首次发布：按时薪实时显示今天已赚多少、还有多久下班",
+        "钱可以换算成其他货币或能加多少升汽油；常驻显示明日油价涨跌",
+        "迷你模式、开机自启、自动更新",
+    ]),
+]
 
 
 # ---------- 配置 ----------
@@ -2155,6 +2221,17 @@ def sun_icon(parent, up, color, bg, scale=1.0):
     return cv
 
 
+def paw_icon(parent, bg, scale=1.0):
+    """猫爪小图标（16 格网格缩放到约 14px）：一个肉垫加四个脚趾，颜色用 itemconfigure 改 tag "paw"。"""
+    k = 14 / 16 * scale
+    cv = tk.Canvas(parent, width=round(16 * k), height=round(16 * k),
+                   bg=bg, highlightthickness=0, borderwidth=0, cursor="hand2")
+    for x, y, r in ((2.6, 7.2, 1.7), (5.9, 3.6, 1.8), (10.1, 3.6, 1.8), (13.4, 7.2, 1.7)):
+        cv.create_oval((x - r) * k, (y - r) * k, (x + r) * k, (y + r) * k, outline="", tags="paw")
+    cv.create_oval(4.4 * k, 7.6 * k, 11.6 * k, 14.4 * k, outline="", tags="paw")
+    return cv
+
+
 def has_cjk(s):
     return any("一" <= ch <= "鿿" for ch in s)
 
@@ -3071,6 +3148,8 @@ class LunchWheel(ToyWindow):
 class JiaoTable(ToyWindow):
     """红色月牙筊杯；只显示传统结果，不增加解读。"""
 
+    ANIMATION_MS = 1480
+
     def __init__(self, app):
         super().__init__(app, "jiao", "赛博圣杯 · 掷筊", "一问一掷 · 静候杯落", "把问题，轻轻放下")
         self.faces, self.count, self.streak_mode = (True, False), 0, False
@@ -3108,51 +3187,126 @@ class JiaoTable(ToyWindow):
         self.draw_progress()
         self.fit()
 
+    def material(self, first, second, amount):
+        """从已有主题颜色调出明暗层次，避免给筊杯写死另一套颜色。"""
+        a, b = self.p[first], self.p[second]
+        return "#" + "".join(f"{round(int(a[i:i+2], 16)*(1-amount) + int(b[i:i+2], 16)*amount):02x}"
+                              for i in (1, 3, 5))
+
     def cup(self, x, y, flat, tilt, squash=1):
         import math
         size = min(1, self.w / 400)
         angle = math.radians(tilt)
 
-        def points(coords):
+        def points(coords, inset=1, dx=0, dy=0):
             out = []
             for px, py in coords:
-                px, py = px * squash * size, (py - 22) * size
-                out.extend(((x + px*math.cos(angle) - py*math.sin(angle))*self.s,
-                            (y + px*math.sin(angle) + py*math.cos(angle))*self.s))
+                # 明暗层共同向木筊内部的同一中心收缩，不再独立错位或拉伸。
+                px, py = -8 + (px + 8)*inset, 22 + (py - 22)*inset
+                # 长轴是横向；绕长轴翻转时压缩纵向，长度保持不变。
+                px, py = px * size, (py - 26) * .78 * squash * size
+                out.extend(((x + px*math.cos(angle) - py*math.sin(angle) + dx*size)*self.s,
+                            (y + px*math.sin(angle) + py*math.cos(angle) + dy*size)*self.s))
             return out
-        arc = [math.pi * i / 32 for i in range(33)]
-        outline = [(66*math.cos(t), 52*math.sin(t)) for t in arc] + [
-            (66*math.cos(t), 12*math.sin(t)) for t in reversed(arc)]
-        self.cv.create_polygon(points(outline), smooth=True,
-            fill=self.p["jiao_flat" if flat else "jiao_red"],
-            outline=self.p["jiao_edge"], width=self.px(3))
+
+        def bezier(a, b, c, d):
+            return [((1-t)**3*a[0] + 3*(1-t)**2*t*b[0] + 3*(1-t)*t*t*c[0] + t**3*d[0],
+                     (1-t)**3*a[1] + 3*(1-t)**2*t*b[1] + 3*(1-t)*t*t*c[1] + t**3*d[1])
+                    for t in (i/12 for i in range(12))]
+
+        # 浅内凹、胖外弧，中段投影宽度约为长度的 37%；两端圆钝收尖。
+        outline = []
+        for segment in (
+            ((-65, -8), (-64, -16), (-57, -14), (-50, -9)),
+            ((-50, -9), (-22, 0), (22, 0), (50, -9)),
+            ((50, -9), (57, -14), (64, -16), (65, -8)),
+            ((65, -8), (71, 19), (43, 60), (0, 60)),
+            ((0, 60), (-43, 60), (-71, 19), (-65, -8)),
+        ):
+            outline.extend(bezier(*segment))
+
+        depth = (8 + 6 * squash) if flat else (6 + 4 * squash)
+        # 上下边沿共用轮廓采样点，逐段封住侧壁，端头不会露出错位缺口。
+        top = points(outline)
+        bottom = points(outline, dx=2, dy=depth)
+        self.cv.create_polygon(bottom, smooth=True,
+                               fill=self.p["jiao_edge"], outline="")
+        wall_color = self.material("jiao_red", "jiao_edge", .22)
+        for i in range(len(outline)):
+            a, b = 2*i, 2*((i+1) % len(outline))
+            self.cv.create_polygon(top[a:a+2] + top[b:b+2] + bottom[b:b+2] + bottom[a:a+2],
+                                   fill=wall_color, outline=wall_color, width=max(.5, self.s*.45))
         if flat:
-            for depth in (22, 31, 40):
-                grain = [(58*math.cos(t), depth*math.sin(t)) for t in arc[4:-4]]
-                self.cv.create_line(points(grain), fill=self.p["jiao_edge"], width=1,
-                                    smooth=True, capstyle="round")
+            self.cv.create_polygon(points(outline), smooth=True,
+                fill=self.p["jiao_flat"], outline=self.material("jiao_flat", "jiao_edge", .30),
+                width=max(1, self.s))
+            # 只有很淡的直木纹，不再用容易被看成水果纹路的同心弧线。
+            for grain in (((-34, 15), (13, 15)), ((-22, 28), (34, 28)), ((-14, 40), (20, 40))):
+                self.cv.create_line(points(grain), fill=self.material("jiao_flat", "jiao_edge", .10),
+                                    width=max(1, self.s*.65), capstyle="round")
         else:
-            shine = [(53*math.cos(t), 40*math.sin(t)) for t in arc[5:24]]
-            self.cv.create_line(points(shine), fill=self.p["jiao_shine"], width=self.px(3),
-                                smooth=True, capstyle="round")
+            # 由背光边缘到受光拱背，三层连续色块抬起中心，再覆一条短高光。
+            self.cv.create_polygon(points(outline), smooth=True,
+                                   fill=self.p["jiao_red"], outline="")
+            self.cv.create_polygon(points(outline, inset=.86), smooth=True,
+                                   fill=self.material("jiao_red", "jiao_shine", .22), outline="")
+            self.cv.create_polygon(points(outline, inset=.63), smooth=True,
+                                   fill=self.material("jiao_red", "jiao_shine", .40), outline="")
+            if squash > .18:
+                # 高光也取同一轮廓的内缩曲线，始终留在亮部内部。
+                self.cv.create_line(points(outline[12:25], inset=.53),
+                                    fill=self.material("jiao_shine", "jiao_flat", .18),
+                                    width=self.px(2), smooth=True, capstyle="round")
+
+    def cup_pose(self, i, flat, t=None):
+        """返回杯的位置、朝向、纵向翻转比例和离地高度；不更改最终结果。"""
+        import math
+        direction = -1 if i == 0 else 1
+        x, y, tilt = self.w*(.31 if i == 0 else .69), 190, (-12 if i == 0 else 16)
+        if t is None:
+            return x, y, flat, tilt, 1, 0
+        elapsed = max(0, t*self.ANIMATION_MS - (40 if i else 0))
+        flight = 950 if i else 900
+        bounce = 140
+        lift, squash, face = 0, 1, flat
+        if elapsed < flight:
+            u = elapsed/flight
+            lift = (94 if i == 0 else 101) * math.sin(math.pi*u)**.9
+            x += direction*14*math.sin(math.pi*u)
+            tilt += direction*(25*math.sin(math.pi*u) + 32*math.sin(2*math.pi*u))
+            previous = getattr(self, "_launch_faces", self.faces)[i]
+            start = 0 if previous else math.pi
+            end = (6 if i else 4)*math.pi + (0 if flat else math.pi)
+            phase = start + (end-start)*(u*u*(3-2*u))
+            roll = math.cos(phase)
+            face, squash = roll >= 0, max(.06, abs(roll))
+        elif elapsed < flight + bounce:
+            u = (elapsed-flight)/bounce
+            lift = (4 if flat else 7)*math.sin(math.pi*u)
+        elif not flat:
+            # 只有凸背会摇晃；幅度衰减三下，最后严格回到平放姿态。
+            duration = self.ANIMATION_MS - (40 if i else 0) - flight - bounce
+            u = min(1, (elapsed-flight-bounce)/duration)
+            rock = math.sin(6*math.pi*u)*(1-u)**2
+            tilt += 9*rock
+            lift = 1.4*abs(rock)
+        return x, y-lift, face, tilt, squash, lift
 
     def draw(self, t=None):
-        import math
         self.cv.delete("all")
         for i, flat in enumerate(self.faces):
-            direction = -1 if i == 0 else 1
-            x, y, tilt, squash = self.w * (.31 if i == 0 else .69), 178, direction*18, 1
-            if t is not None:
-                lift = 100*math.sin(math.pi*min(1, t/.85)) if t < .85 else 8*math.sin((t-.85)/.15*math.pi)
-                y -= lift
-                x += direction*18*math.sin(math.pi*t)
-                tilt += direction*330*math.sin(math.pi*t)
-                squash = max(.12, abs(math.cos(t*math.pi*5))) if t < .85 else 1
-                flat = (int(t*10+i) % 2 == 0) if t < .85 else flat
-            shadow = min(50, self.w*.11)
-            self.cv.create_oval((x-shadow)*self.s, 212*self.s, (x+shadow)*self.s,
-                                223*self.s, fill=self.p["input"], outline="")
-            self.cup(x, y, flat, tilt, squash)
+            x, y, face, tilt, squash, lift = self.cup_pose(i, flat, t)
+            size = min(1, self.w/400)
+            height = min(1, lift/101)
+            # 高处的投影小而淡；落地有一层贴地暗影和两层柔和外晕。
+            radius = (53-22*height)*size
+            for spread, opacity in ((1.18, .055), (1, .10), (.74, .18)):
+                rx, ry = radius*spread, (7-3*height)*spread*size
+                color = self.material("surface", "text3", opacity*(1-.78*height))
+                self.cv.create_oval((x+4-rx)*self.s, (226-ry)*self.s,
+                                    (x+4+rx)*self.s, (226+ry)*self.s,
+                                    fill=color, outline="")
+            self.cup(x, y, face, tilt, squash)
             self.cv.create_text(self.w*(.31 if i == 0 else .69)*self.s, 263*self.s,
                 text="翻转中…" if t is not None else ("平面朝上 · 切面" if flat else "凸面朝上 · 红漆"),
                 font=(FONT, 9), fill=self.p["text3"])
@@ -3190,6 +3344,7 @@ class JiaoTable(ToyWindow):
         if self.count == JIAO_STREAK:
             self.count = 0
         self.state, self.result = "throwing", None
+        self._launch_faces = self.faces
         # 一次只调用一次底层，正反面和结果来自同一组随机值。
         a, b, result = jiao_throw()
         self.faces = (a, b)
@@ -3219,7 +3374,7 @@ class JiaoTable(ToyWindow):
             self.draw()
             self.draw_progress()
             self.fit()
-        self.animate(1280, lambda t: self.draw(t), finish)
+        self.animate(self.ANIMATION_MS, lambda t: self.draw(t), finish)
 
     def snapshot(self):
         return dict(super().snapshot(), faces=tuple(self.faces), streak_mode=self.streak_mode,
@@ -3270,6 +3425,7 @@ class Floater:
 
         if self.conf["hourly"] <= 0:
             self.root.after(300, self.open_settings)
+        self.root.after(1500, self.announce_update)
         self.tick()
 
     # ---------- 外观 ----------
@@ -3306,6 +3462,12 @@ class Floater:
         self.dot = tk.Canvas(head, width=8, height=8, highlightthickness=0, **S)
         self.dot.pack(side="right", padx=(0, 5))
         self.dot_id = self.dot.create_oval(1, 1, 7, 7, fill=p["text3"], outline="")
+        # 猫爪：点一下显示 / 隐藏桌宠（和设置里的“显示宠物”是同一个开关）
+        self.paw = paw_icon(head, p["surface"], self.ui_scale())
+        self.paw.pack(side="right", padx=(0, 10))
+        self.paw.bind("<ButtonRelease-1>", self.on_paw_click)
+        self.paw.bind("<Double-Button-1>", lambda _e: "break")
+        self.refresh_paw()
 
         money = tk.Frame(self.frame, **S)
         money.pack(fill="x", pady=(2, 0))
@@ -3474,6 +3636,7 @@ class Floater:
                                   command=lambda: set_autostart(self.autostart_var.get()))
         self.menu.add_separator()
         self.menu.add_command(label=f"检查更新（当前 v{VERSION}）", command=self.manual_update)
+        self.menu.add_command(label="更新记录…", command=self.show_changelog)
         self.menu.add_command(label="退出", command=self.quit)
 
     def flash(self, msg):
@@ -3510,6 +3673,23 @@ class Floater:
     def drag_end(self, _e):
         self.conf["x"], self.conf["y"] = self.root.winfo_x(), self.root.winfo_y()
         save_conf(self.conf)
+
+    def refresh_paw(self):
+        on = self.conf.get("pet_on", True)
+        self.paw.itemconfigure("paw", fill=self.p["text2"] if on else self.p["track"])
+
+    def on_paw_click(self, e):
+        px, py = getattr(self, "_press", (e.x_root, e.y_root))
+        if abs(e.x_root - px) > 4 or abs(e.y_root - py) > 4:
+            return  # 是在拖窗口
+        if not os.path.exists(os.path.join(PET_DIR, "manifest.json")):
+            self.flash("还没有导入宠物素材：右键 → 设置 → 宠物 → 导入素材")
+            return
+        self.conf["pet_on"] = not self.conf.get("pet_on", True)
+        save_conf(self.conf)
+        self.pet.reload()
+        self.refresh_paw()
+        self.flash("宠物已显示" if self.conf["pet_on"] else "宠物已隐藏，点猫爪再叫它回来")
 
     def toggle_mini(self, _e=None):
         self.conf["mini"] = not self.conf["mini"]
@@ -3888,6 +4068,68 @@ class Floater:
         if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
             self.tarot_table.confirm()
 
+    # ---------- 版本信息 / 更新记录 ----------
+    def show_changelog(self):
+        if getattr(self, "changelog_win", None) and self.changelog_win.winfo_exists():
+            self.changelog_win.lift()
+            return
+        p = self.p
+        win = tk.Toplevel(self.root, bg=p["ground"])
+        self.changelog_win = win
+        win.title("更新记录")
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        win_dark_titlebar(win, self.dark)
+        G = dict(bg=p["ground"])
+        body = tk.Frame(win, padx=20, pady=16, **G)
+        body.pack(fill="both", expand=True)
+        tk.Label(body, text=APP, fg=p["text3"], font=(FONT, 9), **G).pack(anchor="w")
+        tk.Label(body, text=f"当前版本 v{VERSION}", fg=p["text"], font=(FONT, 16, "bold"),
+                 **G).pack(anchor="w", pady=(2, 10))
+
+        # 按字换行：按词换行时 Tk 把整串中文当一个词，圆点会单独占一行
+        txt = tk.Text(body, width=46, height=22, wrap="char", relief="flat", bd=0,
+                      padx=16, pady=12, bg=p["surface"], fg=p["text"], font=(FONT, 10),
+                      highlightthickness=1, highlightbackground=p["border"],
+                      highlightcolor=p["border"], cursor="arrow", spacing1=2, spacing3=2)
+        txt.pack(fill="both", expand=True)
+        txt.tag_configure("ver", font=(FONT, 11, "bold"), foreground=p["text"], spacing1=10)
+        txt.tag_configure("cur", foreground=p["accent"])
+        txt.tag_configure("date", font=(NUM_FONT, 9), foreground=p["text3"])
+        txt.tag_configure("item", lmargin1=4, lmargin2=18, foreground=p["text2"])
+        for i, (ver, day, items) in enumerate(CHANGELOG):
+            tags = ("ver", "cur") if ver == VERSION else ("ver",)
+            txt.insert("end", f"v{ver}", tags)
+            txt.insert("end", f"   {day}" + ("  · 当前" if ver == VERSION else "") + "\n", "date")
+            for it in items:
+                txt.insert("end", f"•  {it}\n", "item")
+        txt.configure(state="disabled")  # 只读；滚轮照常能滚
+
+        foot = tk.Frame(body, pady=12, **G)
+        foot.pack(fill="x")
+        tk.Label(foot, text="新版会自动下载，右键“检查更新”可以马上更新", fg=p["text3"],
+                 font=(FONT, 9), **G).pack(side="left")
+        PillButton(foot, "好的", p["accent"], p["on_accent"], win.destroy, p["ground"],
+                   (FONT, 10)).pack(side="right")
+        win.bind("<Escape>", lambda _e: win.destroy())
+
+        win.update_idletasks()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        x = self.root.winfo_x() - w - 12
+        if x < 0:
+            x = self.root.winfo_x() + self.root.winfo_width() + 12
+        y = max(0, min(self.root.winfo_y(), win.winfo_screenheight() - h - 60))
+        win.geometry(f"+{x}+{y}")
+
+    def announce_update(self):
+        """自动更新后第一次打开：在鼓励语那一行说一声更新了什么。"""
+        seen = self.conf.get("seen_version")
+        if seen != VERSION:
+            self.conf["seen_version"] = VERSION
+            save_conf(self.conf)
+            if seen and vtuple(seen) < vtuple(VERSION):
+                self.flash(f"已更新到 v{VERSION}，右键 → 更新记录 看看新内容")
+
     # ---------- 午饭转盘 / 赛博圣杯 ----------
     def on_toy_click(self, event, action):
         px, py = getattr(self, "_press", (event.x_root, event.y_root))
@@ -4162,6 +4404,12 @@ class Floater:
         alpha.set(c["alpha"])
         alpha.pack(side="right")
 
+        # 版本
+        g = group("版本")
+        fr = row(g, f"当前版本 v{VERSION}")
+        PillButton(fr, "更新记录…", p["track"], p["text"], self.show_changelog, p["surface"],
+                   (FONT, 9)).pack(side="right")
+
         # 宠物
         page[0] = pages["宠物"]
         g = group("宠物", "")
@@ -4315,6 +4563,7 @@ class Floater:
             WX_CITY[0] = c["city"]
             if pet_changed:
                 self.pet.reload()
+                self.refresh_paw()
             self.cheer_state = None
             win.destroy()
             if theme_changed:
