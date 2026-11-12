@@ -1,3 +1,6 @@
 __pycache__/
 *.new
 *.bak.pyw
+.DS_Store
+*.log
+*.app/

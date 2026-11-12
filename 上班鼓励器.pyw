@@ -1200,7 +1200,9 @@ def vtuple(v):
 def can_self_update():
     """开发用的那份（文件夹里有 .git）不自动覆盖；没写权限也不更新。"""
     folder = os.path.dirname(os.path.abspath(__file__))
-    return not os.path.isdir(os.path.join(folder, ".git")) and os.access(folder, os.W_OK)
+    return (not os.path.isdir(os.path.join(folder, ".git"))
+            and not os.path.exists(os.path.join(folder, ".local-patches"))
+            and os.access(folder, os.W_OK))
 
 
 def check_and_update(manual=False):
@@ -1848,6 +1850,8 @@ class Pet:
             return
         s = PET_SIZE * self.zoom()
         self.win = tk.Toplevel(self.app.root)
+        self.win.title(APP + "桌宠")
+        enable_desktop_follow(self.win)
         self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
         bg = PET_KEY
@@ -3914,19 +3918,60 @@ class JiaoTable(ToyWindow):
                     question=self.question.get() if not self.closed else "")
 
 
+def mac_follow_desktops():
+    """让主悬浮窗和桌宠加入所有 Spaces；只在 Tk 主线程调用。"""
+    if not IS_MAC:
+        return
+    import ctypes.util
+    objc = ctypes.CDLL(ctypes.util.find_library("objc"))
+    objc.objc_getClass.argtypes = [ctypes.c_char_p]
+    objc.objc_getClass.restype = ctypes.c_void_p
+    objc.sel_registerName.argtypes = [ctypes.c_char_p]
+    objc.sel_registerName.restype = ctypes.c_void_p
+    address = ctypes.cast(objc.objc_msgSend, ctypes.c_void_p).value
+
+    def send(receiver, selector, result=ctypes.c_void_p, args=(), values=()):
+        fn = ctypes.CFUNCTYPE(result, ctypes.c_void_p, ctypes.c_void_p, *args)(address)
+        return fn(receiver, objc.sel_registerName(selector.encode()), *values)
+
+    app = send(objc.objc_getClass(b"NSApplication"), "sharedApplication")
+    windows = send(app, "windows")
+    for i in range(send(windows, "count", ctypes.c_ulong)):
+        window = send(windows, "objectAtIndex:", args=(ctypes.c_ulong,), values=(i,))
+        title = send(send(window, "title"), "UTF8String", ctypes.c_char_p)
+        if not title or title.decode("utf-8") not in (APP, APP + "桌宠"):
+            continue
+        behavior = send(window, "collectionBehavior", ctypes.c_ulong)
+        # canJoinAllSpaces (1) + fullScreenAuxiliary (256), remove moveToActiveSpace (2).
+        behavior = (behavior & ~2) | 1 | 256
+        send(window, "setCollectionBehavior:", None, (ctypes.c_ulong,), (behavior,))
+        actual = send(window, "collectionBehavior", ctypes.c_ulong)
+        print("桌面跟随已启用:", title.decode("utf-8"), "flags=", actual, file=sys.stderr, flush=True)
+
+
+def enable_desktop_follow(window):
+    if not IS_MAC:
+        return
+
+    def apply(event=None):
+        if event is not None and event.widget is not window:
+            return
+        try:
+            mac_follow_desktops()
+        except Exception as ex:
+            print("桌面跟随设置失败:", ex, file=sys.stderr)
+
+    window.bind("<Map>", apply, add="+")
+    window.after_idle(apply)
+
+
 class Floater:
     def __init__(self):
         self.conf = load_conf()
         self.root = tk.Tk()
         self.root.title(APP)
-        if IS_MAC:
-            # Mac 上 overrideredirect 常出现不显示 / 点不动，改用原生无边框样式
-            try:
-                self.root.tk.call("::tk::unsupported::MacWindowStyle", "style",
-                                  self.root._w, "plain", "none")
-            except tk.TclError:
-                self.root.overrideredirect(True)
-        else:
+        enable_desktop_follow(self.root)
+        if not IS_MAC:
             self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", self.conf["alpha"])
@@ -3954,6 +3999,8 @@ class Floater:
 
         self.pet = Pet(self)
         self._geom = ""
+        # Mac 使用标准标题栏，红色关闭按钮和菜单退出走同一清理流程。
+        self.root.protocol("WM_DELETE_WINDOW", self.quit)
 
         if self.conf["hourly"] <= 0:
             self.root.after(300, self.open_settings)
@@ -4230,7 +4277,10 @@ class Floater:
 
     def show_menu(self, e):
         self.autostart_var.set(autostart_enabled())
-        self.menu.tk_popup(e.x_root, e.y_root)
+        try:
+            self.menu.tk_popup(e.x_root, e.y_root)
+        except tk.TclError:
+            pass  # Mac 上在菜单里点「退出」，菜单收尾时程序已经销毁
 
     def quit(self):
         self.conf["x"], self.conf["y"] = self.root.winfo_x(), self.root.winfo_y()
