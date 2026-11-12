@@ -396,6 +396,38 @@ def tarot_prompt(question, picks):
     return "\n".join(lines)
 
 
+# 今日运势：每天一张今日牌。牌是自己凭直觉选的（洗牌照样随机），选定后记进配置 tarot_daily，
+# 当天再打开直接看这张，第二天才能重抽。
+def tarot_daily_get(conf, day):
+    """今天已经抽过就返回 (图片名, 是否逆位)，否则 None；配置损坏或牌名不认识也当没抽。"""
+    d = conf.get("tarot_daily")
+    if not isinstance(d, dict) or d.get("day") != day.isoformat():
+        return None
+    key = d.get("card")
+    if not any(c[0] == key for c in TAROT_CARDS):
+        return None
+    return key, bool(d.get("rev"))
+
+
+def tarot_daily_set(conf, day, key, rev):
+    """记下今天的牌并保存配置。"""
+    conf["tarot_daily"] = {"day": day.isoformat(), "card": key, "rev": bool(rev)}
+    save_conf(conf)
+
+
+def tarot_daily_prompt(day, key, rev):
+    """今日运势的提示词：一张牌，问今天整体运势。"""
+    zh, en = tarot_name(key)
+    return "\n".join([
+        "你是一名专业的塔罗师，请帮我解读今天的运势。",
+        "请只根据这次抽到的牌来解读，不要结合你对我的任何记忆、之前的对话或个人信息。",
+        f"今天是 {day.year} 年 {day.month} 月 {day.day} 日，星期{'一二三四五六日'[day.weekday()]}，我是一名上班族。",
+        f"我用的是韦特塔罗，抽了一张今日牌：{zh}（{en}），{'逆位' if rev else '正位'}。",
+        "请先说明这张牌（含正逆位）的含义，再分别讲今天的工作、财运、人际和身心状态，"
+        "最后给我一句今天的提醒，以及今天适合做和最好避免的事各两件。",
+    ])
+
+
 # ---------- 午饭吃什么：大转盘 ----------
 # 选项存在配置 lunch_options 里，每个人自己改；转到的结果记在 lunch_history，
 # 之前最近 LUNCH_SKIP 次转到的不再上转盘（周末没转不占名额），免得连着吃同一样。
@@ -2405,8 +2437,9 @@ class TarotTable:
         self.closed, self.state = False, "loading"
         self.selected, self.revealed, self.hover = [], set(), None
         self.question, self.deck = "", []
+        self.mode, self.daily_day = None, None
         self.win = win = tk.Toplevel(app.root, bg=self.p["ground"])
-        win.title("塔罗牌 · 过去 / 现在 / 未来")
+        win.title("塔罗牌 · 选择模式")
         win.attributes("-topmost", True)
         win.resizable(False, False)
         win.protocol("WM_DELETE_WINDOW", self.close)
@@ -2432,15 +2465,16 @@ class TarotTable:
         win.bind("<MouseWheel>", self.wheel)
         win.bind("<Button-4>", lambda _e: self.viewport.yview_scroll(-2, "units"))
         win.bind("<Button-5>", lambda _e: self.viewport.yview_scroll(2, "units"))
-        self.label(self.body, "韦特塔罗 · 三张牌阵", 9, "text3").pack(anchor="w")
-        self.title = self.label(self.body, "留一点时间，给心里的问题", 20, "text", True)
+        self.eyebrow = self.label(self.body, "韦特塔罗", 9, "text3")
+        self.eyebrow.pack(anchor="w")
+        self.title = self.label(self.body, "留一点时间，给今天的自己", 20, "text", True)
         self.title.pack(anchor="w", pady=(self.px(5), self.px(4)))
-        self.hint = self.label(self.body, "准备好后，亲手选出过去、现在与未来。", 10, "text2")
+        self.hint = self.label(self.body, "准备牌面后，选择今日运势或问一个问题。", 10, "text2")
         self.hint.pack(anchor="w", pady=(0, self.px(14)))
         # 第二排两端的牌底约为 446，留出描边、取整和边界的余量。
         self.cv = tk.Canvas(self.body, width=self.px(self.w), height=self.px(456),
                             bg=self.p["surface"], highlightthickness=1,
-                            highlightbackground=self.p["border"], bd=0)
+                            highlightbackground=self.p["border"], highlightcolor=self.p["border"], bd=0)
         self.cv.pack(fill="x")
         self.cv.bind("<Motion>", self.motion)
         self.cv.bind("<Leave>", lambda _e: self.set_hover(None))
@@ -2452,6 +2486,11 @@ class TarotTable:
         self.cv.bind("<Left>", lambda _e: self.keyboard(-1))
         self.cv.bind("<Right>", lambda _e: self.keyboard(1))
         self.cv.bind("<space>", self.keyboard_pick)
+        self.cv.bind("<Up>", lambda _e: self.keyboard(-1))
+        self.cv.bind("<Down>", lambda _e: self.keyboard(1))
+        self.cv.bind("<Tab>", self.mode_tab)
+        self.cv.bind("<Shift-Tab>", self.mode_tab)
+        self.cv.bind("<FocusIn>", lambda _e: self.draw_modes() if self.state == "mode" else None)
         self.poll()
         win.update_idletasks()
         self.fit()
@@ -2465,10 +2504,17 @@ class TarotTable:
                         anchor="w", justify="left", wraplength=self.px(self.w - 8))
 
     def button(self, text, command, primary=True):
-        return PillButton(self.controls, text,
+        button = PillButton(self.controls, text,
                           self.p["accent" if primary else "track"],
                           self.p["on_accent" if primary else "text"], command,
                           self.p["ground"], (FONT, 10))
+        button.configure(takefocus=True)
+        button.bind("<Return>", lambda _e: (command(), "break")[1])
+        button.bind("<space>", lambda _e: (command(), "break")[1])
+        button.bind("<FocusIn>", lambda _e: button.itemconfigure(
+            button.shape, outline=self.p["text2"], width=self.px(2)))
+        button.bind("<FocusOut>", lambda _e: button.itemconfigure(button.shape, outline=""))
+        return button
 
     def later(self, ms, callback):
         """每个回调都有登记；关窗、重开牌局时统一取消。"""
@@ -2590,14 +2636,18 @@ class TarotTable:
         self.later(180, self.poll)
 
     def error(self, message):
+        self.cancel_jobs()
         self.state = "error"
+        self.cv.configure(height=self.px(456), cursor="arrow")
         self.cv.delete("all")
         self.text(self.w / 2, 180, "牌面还没有准备好", 17, "text", True)
         self.text(self.w / 2, 230, message, 10, "danger", width=self.px(self.w - 60))
         self.clear_controls()
         self.button("重试", self.retry).pack(side="right")
+        self.fit()
 
     def retry(self):
+        self.cancel_jobs()
         self.clear_controls()
         self.state = "loading"
         self.images.clear()
@@ -2606,12 +2656,103 @@ class TarotTable:
         self.poll()
 
     def reset(self):
+        """返回模式选择，取消上一局所有动画和复制反馈。"""
         self.cancel_jobs()
-        self.state, self.selected, self.revealed, self.hover = "question", [], set(), None
+        self.state, self.selected, self.revealed, self.hover = "mode", [], set(), None
+        self.mode, self.daily_day = None, None
         self.deck, self.question = [], ""
         # 删除上一局的图像缓存，防止反复抽牌积累翻牌帧。
         self.images.clear()
         self.pixels.clear()
+        self.cv.configure(height=self.px(368), cursor="hand2")
+        self.win.title("塔罗牌 · 选择模式")
+        self.eyebrow.configure(text="韦特塔罗 · 选择模式")
+        self.title.configure(text="今天，想从哪一张牌开始？")
+        self.hint.configure(text="每天一张今日牌，或带着一个问题，看看过去、现在与未来。")
+        self.clear_controls()
+        self.mode_index, self.mode_hover = 0, None
+        self.draw_modes()
+        self.label(self.controls, "Tab / 方向键切换 · 回车 / 空格进入", 9, "text3").pack(anchor="w")
+        self.cv.focus_set()
+        self.viewport.yview_moveto(0)
+        self.fit()
+
+    def mode_tab(self, _event):
+        if self.state == "mode":
+            return self.keyboard(1)
+
+    def mode_hit(self, x, y):
+        if 24 <= x <= self.w - 24:
+            for i in range(2):
+                if 24 + i * 168 <= y <= 176 + i * 168:
+                    return i
+        return None
+
+    def draw_modes(self):
+        if self.state != "mode":
+            return
+        self.cv.delete("all")
+        today = tarot_daily_get(self.app.conf, dt.date.today())
+        detail = (f"今天：{tarot_name(today[0])[0]} · {'逆位' if today[1] else '正位'}"
+                  if today else "每天一次，亲手选出属于今天的一张牌。")
+        # 两张选项上下居中；缩略图与文字共享一张卡片，保留足够的换行空间。
+        for i, (title, subtitle) in enumerate((
+                ("今日运势", "一张今日牌\n" + detail),
+                ("问一个问题", "过去 / 现在 / 未来\n写下心里的问题，亲手选出三张牌。"))):
+            y = 24 + i * 168
+            active = i == self.mode_index or i == self.mode_hover
+            self.cv.create_rectangle(24 * self.s, y * self.s,
+                                     (self.w - 24) * self.s, (y + 152) * self.s,
+                                     fill=self.p["input" if i == self.mode_hover else "surface"],
+                                     outline=self.p["accent" if active else "border"],
+                                     width=self.px(2 if active else 1))
+            if i == 0:
+                self.card(92, y + 76, 64, today[0] if today else TAROT_BACK,
+                          today[1] if today else False)
+            else:
+                # 轻微弧形错位，让三张牌背都露出边缘。
+                for dx, dy in ((-16, 5), (16, 5), (0, -3)):
+                    self.card(92 + dx, y + 76 + dy, 58)
+            self.text(164, y + 30, title, 15, "text", True,
+                      anchor="nw", width=self.px(self.w - 212))
+            self.text(164, y + 72, subtitle, 10, anchor="nw",
+                      width=self.px(self.w - 212))
+
+
+    @property
+    def positions(self):
+        return ("今日",) if self.mode == "daily" else TAROT_POSITIONS
+
+    def choose_mode(self, mode):
+        if self.closed or self.state != "mode" or mode not in ("daily", "question"):
+            return
+        self.cancel_jobs()
+        self.mode = mode
+        self.cv.configure(cursor="arrow")
+        self.eyebrow.configure(text="韦特塔罗 · " + ("今日运势" if mode == "daily" else "三张牌阵"))
+        self.win.title("塔罗牌 · " + ("今日运势" if mode == "daily" else "过去 / 现在 / 未来"))
+        try:
+            if mode == "question":
+                self.question_screen()
+            else:
+                day = dt.date.today()
+                saved = tarot_daily_get(self.app.conf, day)
+                if saved:
+                    self.daily_result(day, saved)
+                else:
+                    self.start_shuffle()
+        except (tk.TclError, OSError, ValueError) as ex:
+            self.error(f"牌面无法读取：{ex}")
+
+    def daily_result(self, day, saved):
+        self.cancel_jobs()
+        self.daily_day = day
+        self.deck, self.selected, self.revealed, self.hover = [saved], [0], {0}, None
+        self.image(saved[0], min(108, self.w / 4 - 22), saved[1])
+        self.result()
+
+    def question_screen(self):
+        self.state = "question"
         self.cv.configure(height=self.px(456))
         self.title.configure(text="留一点时间，给心里的问题")
         self.hint.configure(text="写下你的问题，再开始这一次抽牌。")
@@ -2652,13 +2793,17 @@ class TarotTable:
         self.button_feedback(self.submit_btn, bool(self.question_var.get().strip()))
 
     def enter(self, _event=None):
-        if self.state == "question":
+        if self.state == "mode":
+            self.choose_mode(("daily", "question")[self.mode_index])
+        elif self.state == "question":
             self.submit()
         elif self.state == "picking":
             self.confirm()
         return "break"
 
     def submit(self, question=None):
+        if self.state == "mode":
+            self.choose_mode("question")
         if self.state != "question":
             return
         if question is not None:
@@ -2667,11 +2812,18 @@ class TarotTable:
         if not question:
             self.entry.focus_set()
             return
-        self.question, self.deck, self.state = question, tarot_shuffle(), "shuffling"
+        self.question = question
+        self.start_shuffle()
+
+    def start_shuffle(self):
+        self.cancel_jobs()
+        self.deck, self.state = tarot_shuffle(), "shuffling"
+        self.cv.configure(height=self.px(456))
         self.clear_controls()
-        self.title.configure(text="让问题，慢慢落定")
+        self.title.configure(text="留一点时间，给今天的自己" if self.mode == "daily" else "让问题，慢慢落定")
         self.hint.configure(text="正在洗牌…")
         self.button("重新开始", self.reset, False).pack(side="right")
+        self.fit()
         self.shuffle_frame()
 
     def shuffle_frame(self, frame=0):
@@ -2685,7 +2837,8 @@ class TarotTable:
             x = self.w / 2 + math.cos(a) * min(180, self.w * .26) * spread
             y = 210 + math.sin(a) * 78 * spread + (i - 6) * (1 - spread) * 1.5
             self.card(x, y, 94)
-        self.text(self.w / 2, 390, "把注意力，留在你的问题上。", 10)
+        self.text(self.w / 2, 390, "把注意力，留在今天的自己身上。" if self.mode == "daily"
+                  else "把注意力，留在你的问题上。", 10)
         if frame < 100:
             self.later(16, lambda: self.shuffle_frame(frame + 1))
         else:
@@ -2701,11 +2854,11 @@ class TarotTable:
         return x, y, width
 
     def slot_xy(self, slot):
-        return self.w * (slot + 1) / 4, 132
+        return (self.w / 2 if self.mode == "daily" else self.w * (slot + 1) / 4), 132
 
     def slots(self):
         cw = min(108, self.w / 4 - 22)
-        for j, pos in enumerate(TAROT_POSITIONS):
+        for j, pos in enumerate(self.positions):
             x, y = self.slot_xy(j)
             self.text(x, 22, f"{j + 1:02d}  {pos}", 10, "text2", True)
             self.cv.create_rectangle((x - cw / 2 - 4) * self.s, (y - cw * 260 / 300 - 4) * self.s,
@@ -2726,7 +2879,7 @@ class TarotTable:
             self.later(16, lambda: self.deal_frame(frame + 1))
         else:
             self.state = "picking"
-            self.title.configure(text="凭直觉，选出你的三张牌")
+            self.title.configure(text="凭直觉，选出你的一张今日牌" if self.mode == "daily" else "凭直觉，选出你的三张牌")
             self.pick_controls()
             self.draw()
             self.cv.focus_set()
@@ -2753,9 +2906,10 @@ class TarotTable:
                                          (x + width / 2 + 3) * self.s, (y - 12 + width * 260 / 300 + 3) * self.s,
                                          fill=self.p["surface"], outline=self.p["accent"], width=self.px(3))
                 self.card(x, y - 12, width)
-            self.hint.configure(text=(f"已选 {len(self.selected)}/3 · 下一张：{TAROT_POSITIONS[len(self.selected)]}"
-                                      if len(self.selected) < 3 else "三张牌已就位。准备好后，点「确定」翻牌。"))
-            self.button_feedback(self.confirm_btn, len(self.selected) == 3)
+            count = len(self.positions)
+            self.hint.configure(text=(f"已选 {len(self.selected)}/{count} · 下一张：{self.positions[len(self.selected)]}"
+                                      if len(self.selected) < count else "牌已就位。准备好后，点「确定」翻牌。"))
+            self.button_feedback(self.confirm_btn, len(self.selected) == count)
         for slot, i in enumerate(self.selected):
             x, y = self.slot_xy(slot)
             key, rev = self.deck[i]
@@ -2777,6 +2931,12 @@ class TarotTable:
         return None
 
     def set_hover(self, i):
+        if self.state == "mode":
+            if self.mode_hover is not None:
+                self.mode_hover = None
+                self.draw_modes()
+            self.cv.configure(cursor="arrow")
+            return
         if i is not None and (not isinstance(i, int) or not 0 <= i < 78 or i in self.selected):
             i = None
         if self.state == "picking" and self.hover != i:
@@ -2785,11 +2945,23 @@ class TarotTable:
             self.draw()
 
     def motion(self, event):
+        if self.state == "mode":
+            i = self.mode_hit(self.cv.canvasx(event.x) / self.s, self.cv.canvasy(event.y) / self.s)
+            if i != self.mode_hover:
+                self.mode_hover = i
+                self.cv.configure(cursor="hand2" if i is not None else "arrow")
+                self.draw_modes()
+            return
         if self.state == "picking":
             self.set_hover(self.hit(self.cv.canvasx(event.x) / self.s,
                                    self.cv.canvasy(event.y) / self.s))
 
     def click(self, event):
+        if self.state == "mode":
+            i = self.mode_hit(self.cv.canvasx(event.x) / self.s, self.cv.canvasy(event.y) / self.s)
+            if i is not None:
+                self.choose_mode(("daily", "question")[i])
+            return
         if self.state != "picking":
             return
         x, y = self.cv.canvasx(event.x) / self.s, self.cv.canvasy(event.y) / self.s
@@ -2804,6 +2976,11 @@ class TarotTable:
             self.pick(i)
 
     def keyboard(self, direction):
+        if self.state == "mode":
+            self.mode_index = (self.mode_index + direction) % 2
+            self.mode_hover = None
+            self.draw_modes()
+            return "break"
         if self.state != "picking":
             return "break"
         i = self.hover if self.hover is not None else (-1 if direction > 0 else 78)
@@ -2815,6 +2992,8 @@ class TarotTable:
         return "break"
 
     def keyboard_pick(self, _event):
+        if self.state == "mode":
+            return self.enter()
         if self.hover is not None:
             self.pick(self.hover)
         return "break"
@@ -2824,13 +3003,13 @@ class TarotTable:
             return
         if i in self.selected:
             self.selected.remove(i)
-        elif len(self.selected) < 3:
+        elif len(self.selected) < len(self.positions):
             self.selected.append(i)
         self.hover = None
         self.draw()
 
     def confirm(self):
-        if self.state != "picking" or len(self.selected) != 3:
+        if self.state != "picking" or len(self.selected) != len(self.positions):
             return
         # 在开始动画之前读取三张牌；损坏图片可重试，不留下半翻开的牌局。
         try:
@@ -2838,6 +3017,15 @@ class TarotTable:
             for i in self.selected:
                 key, rev = self.deck[i]
                 self.image(key, cw, rev)
+            if self.mode == "daily":
+                day = dt.date.today()
+                saved = tarot_daily_get(self.app.conf, day)
+                if saved:
+                    self.daily_result(day, saved)
+                    return
+                key, rev = self.deck[self.selected[0]]
+                tarot_daily_set(self.app.conf, day, key, rev)
+                self.daily_day = day
         except (tk.TclError, OSError, ValueError) as ex:
             self.error(f"牌面无法读取：{ex}")
             return
@@ -2845,7 +3033,7 @@ class TarotTable:
         self.cv.configure(cursor="arrow")
         self.clear_controls()
         self.button("重新开始", self.reset, False).pack(side="right")
-        self.title.configure(text="过去、现在、未来，依次展开")
+        self.title.configure(text="属于今天的一张牌，慢慢展开" if self.mode == "daily" else "过去、现在、未来，依次展开")
         self.hint.configure(text="正在翻牌…")
         self.flip()
 
@@ -2867,20 +3055,25 @@ class TarotTable:
         else:
             self.revealed.add(slot)
             self.draw()
-            if slot < 2:
+            if slot + 1 < len(self.positions):
                 self.later(160, lambda: self.flip(slot + 1))
             else:
                 self.later(180, self.result)
 
     def result(self):
+        self.cancel_jobs()
         self.state = "result"
         self.draw()
         self.cv.configure(height=self.px(300))
-        self.title.configure(text="你的三张牌，已展开")
-        self.hint.configure(text=self.question)
+        self.title.configure(text="你的今日牌，已展开" if self.mode == "daily" else "你的三张牌，已展开")
+        self.hint.configure(text=(f"{self.daily_day.month} 月 {self.daily_day.day} 日 · "
+                                  f"周{'一二三四五六日'[self.daily_day.weekday()]} · 今天已经抽过，明天再来。"
+                                  if self.mode == "daily" else self.question))
         self.clear_controls()
-        self.label(self.controls, "带着问题与牌面，去问 AI", 11, "text", True).pack(anchor="w")
-        self.prompt = tarot_prompt(self.question, [self.deck[i] for i in self.selected])
+        self.label(self.controls, "带着今日牌，去问 AI" if self.mode == "daily" else "带着问题与牌面，去问 AI",
+                   11, "text", True).pack(anchor="w")
+        self.prompt = (tarot_daily_prompt(self.daily_day, *self.deck[self.selected[0]])
+                       if self.mode == "daily" else tarot_prompt(self.question, [self.deck[i] for i in self.selected]))
         area = tk.Frame(self.controls, bg=self.p["surface"], highlightthickness=1,
                         highlightbackground=self.p["border"])
         area.pack(fill="x", pady=(self.px(8), self.px(12)))
@@ -2898,7 +3091,7 @@ class TarotTable:
         text.configure(height=max(len(self.prompt.splitlines()), display_lines))
         self.copy_btn = self.button("复制", self.copy)
         self.copy_btn.pack(side="right")
-        self.button("再抽一次", self.reset, False).pack(side="right", padx=self.px(10))
+        self.button("返回" if self.mode == "daily" else "再抽一次", self.reset, False).pack(side="right", padx=self.px(10))
         self.viewport.yview_moveto(0)
         self.fit()
 
@@ -4132,6 +4325,11 @@ class Floater:
         if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
             self.tarot_table.submit(question)
 
+    def tarot_mode(self, mode):
+        """截图钩子：在模式选择页进入 daily（今日运势）或 question（提问）。"""
+        if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
+            self.tarot_table.choose_mode(mode)
+
     def tarot_pick(self, i):
         """截图钩子：选铺牌中的第 i 张（从 0 开始）；再点一次撤回。"""
         if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
@@ -4143,7 +4341,7 @@ class Floater:
             self.tarot_table.set_hover(i)
 
     def tarot_confirm(self):
-        """截图钩子：选满三张后依次翻牌。"""
+        """截图钩子：选满当前模式所需张数后翻牌（今日一张，提问三张）。"""
         if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
             self.tarot_table.confirm()
 
