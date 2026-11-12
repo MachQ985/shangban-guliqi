@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.8.1"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.9.0"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -483,6 +483,10 @@ def jiao_throw():
 # ---------- 版本记录：发布新版时在最上面加一条（设置 → 其他 → 更新记录，右键菜单也能打开） ----------
 # (版本号, 日期, [这一版改了什么, ...])，新的在前
 CHANGELOG = [
+    ("1.9.0", "2026-11-12", [
+        "桌宠素材升级到 256×256 高清：导入清晰的原图不再被压糊，显示大小不变",
+        "点猫爪开关显示 / 隐藏桌宠时，加了登场 / 退场的淡入淡出动画",
+    ]),
     ("1.8.1", "2026-11-10", [
         "赛博圣杯的筊杯重画：胖弯月造型，有厚度、红漆高光和贴地阴影",
         "掷杯动画更真实：抛起、空中翻转、错开落地，凸面朝上的那片会晃几下再停稳",
@@ -1204,10 +1208,11 @@ PET_FALLBACK = {"click": "happy", "pet": "happy", "belly": "happy", "angry": "cl
                 "full": "happy", "excited": "happy", "sad": "idle",
                 "scared": "angry", "twitch": "sleep", "upsleep": "nap", "watchl": "look",
                 "watchr": "look", "swatl": "play", "swatr": "play", "curious": "look",
-                "rub": "pet"}
+                "rub": "pet", "appear": "wake", "disappear": "sleep"}
 PET_EFFECTS = ["heart", "question", "exclaim", "anger", "note", "sweat"]  # 头顶小特效 fx_*.png
 PET_STATES = ["idle", "eat", "play", "sleep", "happy", "click", "hungry", "work",
-              "rain", "snow", "cold", "hot", "sunny"] + PET_EXTRA_LOOP + PET_EXTRA_ONCE + PET_INTERACT
+              "rain", "snow", "cold", "hot", "sunny",
+              "appear", "disappear"] + PET_EXTRA_LOOP + PET_EXTRA_ONCE + PET_INTERACT
 PET_STATE_NAMES = {"idle": "平时", "eat": "吃饭", "play": "玩耍", "sleep": "睡觉", "happy": "开心",
                    "click": "被戳", "hungry": "饿了", "work": "上班", "rain": "下雨", "snow": "下雪",
                    "cold": "寒冷", "hot": "炎热", "sunny": "晴天",
@@ -1222,13 +1227,15 @@ PET_STATE_NAMES = {"idle": "平时", "eat": "吃饭", "play": "玩耍", "sleep":
                    "hairball": "吐毛球", "scared": "害怕", "curious": "好奇", "rub": "撒娇",
                    "drink": "喝水", "liquid": "液体猫", "pancake": "猫饼", "twitch": "睡梦抽动",
                    "upsleep": "四脚朝天睡", "watchl": "往左看", "watchr": "往右看",
-                   "swatl": "往左拍", "swatr": "往右拍"}
+                   "swatl": "往左拍", "swatr": "往右拍", "appear": "登场", "disappear": "退场"}
 PET_ICONS = ["snack", "freeze_dried", "can", "wand"]
 PET_DIR = os.path.join(CONF_DIR, "pet")
-PET_SIZE, PET_GROUND, PET_ICON = 64, 56, 32   # 帧 64×64，脚底在第 56 行；图标 32×32
+PET_SIZE, PET_GROUND, PET_ICON = 64, 56, 32   # 显示几何的逻辑画布：帧 64×64，脚底在第 56 行；图标 32×32
 PET_FX = 16                                   # 头顶特效 16×16
 PET_TOP = 16                                  # 猫窗口上方多留的高度，给特效往上飘
-PET_CAT_HEIGHT = 46                           # 自动处理时，平时坐姿缩放到大约这么高
+PET_CAT_HEIGHT = 46                           # 自动处理时，平时坐姿缩放到大约这么高（相对 PET_SIZE 画布）
+PET_STORE = 256                               # 动画帧实际存储分辨率，显示时再缩到 PET_SIZE×大小；越大越清晰、导入越慢（想快改回 64）
+PET_SCALE = PET_STORE // PET_SIZE             # 存储相对逻辑画布的倍数
 PET_KEY = "#ff00fe"                           # 读图时用这个颜色标记透明像素
 PET_FPS_MS = 250
 
@@ -1294,6 +1301,8 @@ PET_AI_BATCHES = [
         ("watchr", "盯着画面右边"),
         ("swatl", "向左边伸爪拍"),
         ("swatr", "向右边伸爪拍"),
+        ("appear", "登场：从低伏/蜷缩慢慢起身坐直，像刚出现（显示宠物时播；缺了用惊醒代替）"),
+        ("disappear", "退场：从坐姿缩低、身体变小准备离开，像要消失（隐藏宠物时播；缺了用睡觉代替）"),
     ]),
 ]
 PET_AI_ITEMS = [
@@ -1526,7 +1535,7 @@ def import_pet_assets(src, progress=None):
 
     tmp = tempfile.mkdtemp(prefix="pet_")
     sprite_files = [p for v in frames.values() for p in v]
-    std = all(is_std(p, PET_SIZE) for p in sprite_files)
+    std = all(is_std(p, PET_STORE) for p in sprite_files)
     out_frames = {}
     if std:  # 已经是标准规格：原样复制
         for st, paths in frames.items():
@@ -1547,15 +1556,15 @@ def import_pet_assets(src, progress=None):
         if not bb:
             return {"ok": False, "error": "“平时”那张图是空的，或者背景没能去掉"}
         # 按“平时”那张算缩放和位置，整套共用，动作之间不跳
-        scale = PET_CAT_HEIGHT / ((bb[3] - bb[1] + 1) * k0)
+        scale = PET_CAT_HEIGHT * PET_SCALE / ((bb[3] - bb[1] + 1) * k0)
         cx = (bb[0] + bb[2] + 1) / 2 * k0
         bottom = (bb[3] + 1) * k0
         grids, names = [], []
         for n, (st, paths) in enumerate(frames.items(), 1):
             for i, p in enumerate(paths, 1):
                 g, k = read[p]
-                grids.append(_pet_resample(g, k, scale, cx, bottom, PET_SIZE,
-                                           PET_SIZE / 2, PET_GROUND + 1))
+                grids.append(_pet_resample(g, k, scale, cx, bottom, PET_STORE,
+                                           PET_STORE / 2, (PET_GROUND + 1) * PET_SCALE))
                 names.append((st, f"{st}_{i}.png"))
             if progress:
                 progress(f"缩成像素风 {n}/{len(frames)}…")
@@ -1656,6 +1665,76 @@ class Pet:
     def zoom(self):
         return int(self.app.conf.get("pet_zoom", 2))
 
+    def _disp(self, name, target):
+        """把一帧缩放到目标显示像素；按文件实际分辨率有理缩放，所以 64 旧素材和 256 高清素材都正确。"""
+        from math import gcd
+        img = tk.PhotoImage(file=os.path.join(PET_DIR, name))
+        src = img.width() or target
+        g = gcd(target, src)
+        a, b = target // g, src // g
+        if a > 1:
+            img = img.zoom(a)
+        if b > 1:
+            img = img.subsample(b)
+        return img
+
+    def set_visible(self, on, anim=True):
+        """显示 / 隐藏桌宠，带淡入淡出（有 appear / disappear 素材就一起播）。连续切换时后一次优先。"""
+        self.vis_gen = getattr(self, "vis_gen", 0) + 1
+        gen = self.vis_gen
+        if on:
+            if self.win is None:
+                self.reload()               # 建窗（调用方须先把 conf['pet_on'] 置 True）
+            if self.win is None:
+                return                       # 没素材，建不起来
+            if not anim:
+                self._set_alpha(1.0)
+                return
+            self._set_alpha(0.0)
+            if "appear" in self.frames:
+                self.play("appear", max(.4, len(self.frames["appear"]) * self.frame_ms() / 1000 * 2))
+            else:
+                self.transient = []          # 清掉可能残留的退场动作
+            self._fade(gen, 0.0, 1.0, then=lambda: self.jiggle("bounce"))
+        else:
+            if self.win is None:
+                return
+            if not anim:
+                self.win.destroy()
+                self.win = None
+                return
+            dur = .5
+            if "disappear" in self.frames:
+                dur = max(.5, len(self.frames["disappear"]) * self.frame_ms() / 1000 * 2)
+                self.play("disappear", dur)
+            self._fade(gen, 1.0, 0.0, steps=max(10, int(dur / .025)),
+                       then=lambda: self._finish_hide(gen))
+
+    def _set_alpha(self, v):
+        try:
+            self.win.attributes("-alpha", v)
+        except tk.TclError:
+            pass                             # 平台不支持窗口透明度：忽略（相当于瞬间）
+
+    def _fade(self, gen, start, end, then=None, i=0, steps=12, ms=25):
+        if gen != self.vis_gen or self.win is None:   # 被新的切换取代，或窗口已没了
+            if then and gen == self.vis_gen:
+                then()
+            return
+        self._set_alpha(start + (end - start) * min(i, steps) / steps)
+        if i >= steps:
+            if then:
+                then()
+            return
+        self.app.root.after(ms, self._fade, gen, start, end, then, i + 1, steps, ms)
+
+    def _finish_hide(self, gen):
+        if gen != self.vis_gen:              # 淡出途中又点了显示：保留窗口，交给那次操作
+            return
+        if self.win is not None:
+            self.win.destroy()
+            self.win = None
+
     def reload(self):
         """（重新）读取素材并建窗口；没导入素材或关掉了宠物就不显示。"""
         self.frames, self.icons, self.effects, self.manifest = {}, {}, {}, {}
@@ -1670,11 +1749,11 @@ class Pet:
                 self.manifest = json.load(f)
             z = self.zoom()
             for st, names in self.manifest.get("states", {}).items():
-                self.frames[st] = [tk.PhotoImage(file=os.path.join(PET_DIR, n)).zoom(z) for n in names]
+                self.frames[st] = [self._disp(n, PET_SIZE * z) for n in names]
             for ic, n in self.manifest.get("icons", {}).items():
                 self.icons[ic] = tk.PhotoImage(file=os.path.join(PET_DIR, n))
             for fx, n in self.manifest.get("effects", {}).items():
-                self.effects[fx] = tk.PhotoImage(file=os.path.join(PET_DIR, n)).zoom(z)
+                self.effects[fx] = self._disp(n, PET_FX * z)
         except Exception:
             self.frames = {}
             return
@@ -3687,7 +3766,7 @@ class Floater:
             return
         self.conf["pet_on"] = not self.conf.get("pet_on", True)
         save_conf(self.conf)
-        self.pet.reload()
+        self.pet.set_visible(self.conf["pet_on"], anim=True)
         self.refresh_paw()
         self.flash("宠物已显示" if self.conf["pet_on"] else "宠物已隐藏，点猫爪再叫它回来")
 
@@ -4450,7 +4529,7 @@ class Floater:
             self.pet.reload()
             pet_status()
             lines = [f"导入成功：{len(rep['states'])} 个动作"
-                     + ("，已自动处理成 64×64 像素风" if rep["processed"] else "")]
+                     + (f"，已自动处理成 {PET_STORE}×{PET_STORE} 像素风" if rep["processed"] else "")]
             if rep["missing"]:
                 lines.append("缺少（用平时的样子代替）：" +
                              "、".join(PET_STATE_NAMES[s] for s in rep["missing"]))
@@ -4562,7 +4641,10 @@ class Floater:
             save_conf(c)
             WX_CITY[0] = c["city"]
             if pet_changed:
-                self.pet.reload()
+                if c["pet_on"] != pet_before[0] and c["pet_zoom"] == pet_before[1]:
+                    self.pet.set_visible(c["pet_on"], anim=True)   # 只动了显示开关：带出现/消失动画
+                else:
+                    self.pet.reload()                              # 改了缩放（可能同时改开关）：直接重建
                 self.refresh_paw()
             self.cheer_state = None
             win.destroy()
