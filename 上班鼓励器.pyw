@@ -415,17 +415,61 @@ def tarot_daily_set(conf, day, key, rev):
     save_conf(conf)
 
 
-def tarot_daily_prompt(day, key, rev):
-    """今日运势的提示词：一张牌，问今天整体运势。"""
+# 今日运势的主题：(名字, 让 AI 重点讲什么)。最后一个「自定义」= 自己写一句问题。
+TAROT_TOPICS = [
+    ("综合", "再分别讲今天的工作、财运、人际和身心状态"),
+    ("工作", "再重点讲今天的工作：任务进展、和领导同事的配合、要留意的坑"),
+    ("财运", "再重点讲今天的财运：收入、花钱、有没有意外的进账或开销"),
+    ("感情", "再重点讲今天的感情：单身的桃花和相处、有伴的关系和沟通"),
+    ("人际", "再重点讲今天的人际：和同事、朋友、家人的相处，适合找谁、躲着谁"),
+    ("健康", "再重点讲今天的身体和精力：作息、饮食、压力，需要注意哪里"),
+    ("学习", "再重点讲今天适不适合学新东西、考试或提升自己，怎么学效率高"),
+    ("心情", "再重点讲今天的心情和情绪：可能的起伏、原因和怎么让自己舒服一点"),
+    ("做决定", "再讲今天适不适合做重要决定，做决定时要注意什么"),
+]
+TAROT_CUSTOM = "自定义"
+TAROT_QUESTION_MAX = 60   # 自定义问题最多几个字
+
+
+def tarot_topic_get(conf):
+    """上次选的主题和自定义问题（跨天保留，下次打开默认还是它）；不认识的主题回到「综合」。"""
+    topic = conf.get("tarot_topic")
+    names = [t[0] for t in TAROT_TOPICS] + [TAROT_CUSTOM]
+    if topic not in names:
+        topic = TAROT_TOPICS[0][0]
+    q = conf.get("tarot_question")
+    return topic, (q.strip()[:TAROT_QUESTION_MAX] if isinstance(q, str) else "")
+
+
+def tarot_topic_set(conf, topic, question=""):
+    """记下当前主题（自定义时连同问题）并保存配置。"""
+    conf["tarot_topic"] = topic
+    if topic == TAROT_CUSTOM:
+        conf["tarot_question"] = (question or "").strip()[:TAROT_QUESTION_MAX]
+    save_conf(conf)
+
+
+def tarot_daily_prompt(day, key, rev, topic="综合", question=""):
+    """今日运势的提示词：一张今日牌 + 主题（或自定义问题）。自定义但问题为空时按「综合」处理。"""
     zh, en = tarot_name(key)
-    return "\n".join([
+    question = (question or "").strip()
+    focus = dict(TAROT_TOPICS).get(topic, TAROT_TOPICS[0][1])
+    lines = [
         "你是一名专业的塔罗师，请帮我解读今天的运势。",
         "请只根据这次抽到的牌来解读，不要结合你对我的任何记忆、之前的对话或个人信息。",
         f"今天是 {day.year} 年 {day.month} 月 {day.day} 日，星期{'一二三四五六日'[day.weekday()]}，我是一名上班族。",
         f"我用的是韦特塔罗，抽了一张今日牌：{zh}（{en}），{'逆位' if rev else '正位'}。",
-        "请先说明这张牌（含正逆位）的含义，再分别讲今天的工作、财运、人际和身心状态，"
-        "最后给我一句今天的提醒，以及今天适合做和最好避免的事各两件。",
-    ])
+    ]
+    if topic == TAROT_CUSTOM and question:
+        lines.append(f"我今天想问的是：{question}")
+        lines.append("请先说明这张牌（含正逆位）的含义，再结合我的问题具体分析，"
+                     "最后给我一句今天的提醒，以及今天适合做和最好避免的事各两件。")
+    else:
+        if topic != TAROT_TOPICS[0][0] and topic in dict(TAROT_TOPICS):
+            lines.append(f"今天我最想了解的是：{topic}。")
+        lines.append(f"请先说明这张牌（含正逆位）的含义，{focus}，"
+                     "最后给我一句今天的提醒，以及今天适合做和最好避免的事各两件。")
+    return "\n".join(lines)
 
 
 # ---------- 午饭吃什么：大转盘 ----------
@@ -2546,6 +2590,7 @@ class TarotTable:
         if event.widget == self.win:
             self.closed = True
             self.cancel_jobs()
+            self.clear_topic_trace()
             self.images.clear()
             self.pixels.clear()
             if getattr(self.app, "tarot_win", None) is self.win:
@@ -2555,6 +2600,7 @@ class TarotTable:
         if not self.closed:
             self.closed = True
             self.cancel_jobs()
+            self.clear_topic_trace()
             self.win.destroy()
 
     def wheel(self, event):
@@ -2562,6 +2608,11 @@ class TarotTable:
                                   (2 if abs(event.delta) >= 120 else 1), "units")
 
     def fit(self):
+        # 主题页不需要牌桌；恢复时显式放在 controls 前，避免 pack 顺序颠倒。
+        if self.state == "topic":
+            self.cv.pack_forget()
+        else:
+            self.cv.pack(fill="x", before=self.controls)
         self.win.update_idletasks()
         h = min(self.body.winfo_reqheight(), int(self.win.winfo_screenheight() * .84))
         overflow = self.body.winfo_reqheight() > h
@@ -2577,7 +2628,13 @@ class TarotTable:
         y = max(0, min(self.app.root.winfo_y(), self.win.winfo_screenheight() - h - self.px(48)))
         self.win.geometry(f"{width}x{h}+{x}+{y}")
 
+    def clear_topic_trace(self):
+        if hasattr(self, "topic_trace"):
+            self.topic_var.trace_remove("write", self.topic_trace)
+            del self.topic_trace
+
     def clear_controls(self):
+        self.clear_topic_trace()
         for child in self.controls.winfo_children():
             child.destroy()
 
@@ -2669,7 +2726,7 @@ class TarotTable:
         # 删除上一局的图像缓存，防止反复抽牌积累翻牌帧。
         self.images.clear()
         self.pixels.clear()
-        self.cv.configure(height=self.px(368), cursor="hand2")
+        self.cv.configure(height=self.px(368), cursor="hand2", takefocus=True)
         self.win.title("塔罗牌 · 选择模式")
         self.eyebrow.configure(text="韦特塔罗 · 选择模式")
         self.title.configure(text="今天，想从哪一张牌开始？")
@@ -2700,6 +2757,8 @@ class TarotTable:
         today = tarot_daily_get(self.app.conf, dt.date.today())
         detail = (f"今天：{tarot_name(today[0])[0]} · {'逆位' if today[1] else '正位'}"
                   if today else "每天一次，亲手选出属于今天的一张牌。")
+        if today:
+            detail += "\n主题：" + tarot_topic_get(self.app.conf)[0]
         # 两张选项上下居中；缩略图与文字共享一张卡片，保留足够的换行空间。
         for i, (title, subtitle) in enumerate((
                 ("今日运势", "一张今日牌\n" + detail),
@@ -2745,7 +2804,7 @@ class TarotTable:
                 if saved:
                     self.daily_result(day, saved)
                 else:
-                    self.start_shuffle()
+                    self.topic_screen()
         except (tk.TclError, OSError, ValueError) as ex:
             self.error(f"牌面无法读取：{ex}")
 
@@ -2755,6 +2814,178 @@ class TarotTable:
         self.deck, self.selected, self.revealed, self.hover = [saved], [0], {0}, None
         self.image(saved[0], min(108, self.w / 4 - 22), saved[1])
         self.result()
+
+    def topic_screen(self):
+        """今日未抽牌时先选主题，开始洗牌才保存。"""
+        self.cancel_jobs()
+        self.state = "topic"
+        self.title.configure(text="今天，想关注哪一面？")
+        self.hint.configure(text="选一个主题，或写下今天想问的问题。今日牌每天固定，主题随时能换。")
+        self.cv.delete("all")
+        self.cv.pack_forget()
+        self.cv.configure(takefocus=False)
+        self.clear_controls()
+        self.topic_controls()
+        self.start_btn = self.button("开始洗牌", self.start_daily)
+        self.start_btn.pack(side="right", pady=(self.px(12), 0))
+        self.button("返回", self.reset, False).pack(side="right", padx=self.px(10),
+                                                  pady=(self.px(12), 0))
+        self.topic_feedback()
+        self.topic_buttons[self.topic_names.index(self.topic)].focus_set()
+        self.viewport.yview_moveto(0)
+        self.fit()
+
+    def topic_controls(self):
+        """选主题页和结果页共用；胶囊按窗口宽度和缩放绘制。"""
+        self.topic, question = tarot_topic_get(self.app.conf)
+        self.topic_names = [name for name, _ in TAROT_TOPICS] + [TAROT_CUSTOM]
+        panel = tk.Frame(self.controls, bg=self.p["ground"])
+        panel.pack(fill="x", pady=(0, self.px(10)))
+        self.label(panel, "今日主题", 10, "text", True).pack(anchor="w")
+        grid = tk.Frame(panel, bg=self.p["ground"])
+        grid.pack(fill="x", pady=(self.px(6), 0))
+        self.topic_buttons = []
+        self.topic_keyboard = False
+        for i, name in enumerate(self.topic_names):
+            grid.columnconfigure(i % 5, weight=1, uniform="topic")
+            button = tk.Canvas(grid, width=self.px(self.w / 5 - 8), height=self.px(32),
+                               bg=self.p["ground"], highlightthickness=0,
+                               takefocus=True, cursor="hand2")
+            button.grid(row=i // 5, column=i % 5, sticky="ew", padx=self.px(3), pady=self.px(3))
+            button.bind("<Configure>", lambda _e: self.topic_feedback())
+            button.bind("<Button-1>", lambda _e, n=name: self.topic_click(n))
+            for key in ("<Tab>", "<Shift-Tab>", "<ISO_Left_Tab>"):
+                button.bind(key, self.topic_tab)
+            for key in ("<space>", "<Return>"):
+                button.bind(key, lambda _e, n=name: (self.select_topic(n), "break")[1])
+            for key, step in (("<Left>", -1), ("<Right>", 1), ("<Up>", -5), ("<Down>", 5)):
+                button.bind(key, lambda _e, j=i, d=step: self.topic_focus(j + d))
+            button.bind("<FocusIn>", lambda _e: self.topic_feedback())
+            button.bind("<FocusOut>", lambda _e: self.topic_feedback())
+            self.topic_buttons.append(button)
+        self.topic_input = tk.Frame(panel, bg=self.p["ground"])
+        self.label(self.topic_input, f"今天想问什么？（最多 {TAROT_QUESTION_MAX} 个字）", 9, "text3").pack(anchor="w")
+        self.topic_var = tk.StringVar(master=self.win, value=question)
+        # 边框包住留白，Entry 本身无边框；两个页面共用同样的内边距。
+        entry_box = tk.Frame(self.topic_input, bg=self.p["surface"],
+                             padx=self.px(10), pady=self.px(7), highlightthickness=1,
+                             highlightbackground=self.p["border"])
+        entry_box.pack(fill="x", pady=(self.px(4), 0))
+        self.topic_entry = tk.Entry(entry_box, textvariable=self.topic_var, font=(FONT, 11),
+                                    bg=self.p["surface"], fg=self.p["text"],
+                                    insertbackground=self.p["text"], relief="flat", bd=0,
+                                    highlightthickness=0)
+        self.topic_entry.pack(fill="x")
+        self.topic_entry.bind("<FocusIn>", lambda _e: entry_box.configure(
+            highlightbackground=self.p["accent"]))
+        self.topic_entry.bind("<FocusOut>", lambda _e: entry_box.configure(
+            highlightbackground=self.p["border"]))
+        self.topic_entry.bind("<Return>", self.topic_enter)
+        self.topic_trace = self.topic_var.trace_add("write", self.topic_changed)
+        self.topic_feedback()
+
+    def topic_click(self, topic):
+        self.topic_keyboard = False
+        self.select_topic(topic)
+        return "break"
+
+    def topic_tab(self, _event=None):
+        # 保留 Tk 原生 Tab 顺序，焦点变化时重绘轻量的键盘提示。
+        self.topic_keyboard = True
+        self.topic_feedback()
+
+    def topic_focus(self, index):
+        self.topic_keyboard = True
+        self.topic_buttons[index % len(self.topic_buttons)].focus_set()
+        self.topic_feedback()
+        return "break"
+
+    def topic_enter(self, _event=None):
+        if self.state == "topic":
+            self.start_daily()
+        return "break"
+
+    def select_topic(self, topic, question=None):
+        """点击和测试钩子共用；结果页立即保存并刷新提示词。"""
+        if self.closed or self.mode != "daily" or self.state not in ("topic", "result"):
+            return
+        if topic not in self.topic_names:
+            return
+        self.topic = topic
+        self.topic_buttons[self.topic_names.index(topic)].focus_set()
+        if topic == TAROT_CUSTOM and question is not None:
+            self.topic_var.set(str(question)[:TAROT_QUESTION_MAX])
+        else:
+            self.topic_changed()
+
+    def topic_changed(self, *_):
+        if self.closed or self.state not in ("topic", "result") or self.mode != "daily":
+            return
+        question = self.topic_var.get()
+        if len(question) > TAROT_QUESTION_MAX:
+            self.topic_var.set(question[:TAROT_QUESTION_MAX])
+        self.topic_feedback()
+        if self.state == "result":
+            tarot_topic_set(self.app.conf, self.topic, self.topic_var.get())
+            self.update_daily_prompt()
+        self.fit()
+
+    def topic_feedback(self):
+        if self.closed or not hasattr(self, "topic_trace"):
+            return
+        focused = self.win.focus_get()
+        for name, button in zip(self.topic_names, self.topic_buttons):
+            active = name == self.topic
+            bg = self.p["accent" if active else "track"]
+            fg = self.p["on_accent" if active else "text"]
+            w, h, r = button.winfo_width(), self.px(32), self.px(16)
+            button.delete("all")
+            button.create_polygon(r, 1, w-r, 1, w-1, 1, w-1, r, w-1, h-1,
+                                  w-r, h-1, r, h-1, 1, h-1, 1, r, 1, 1,
+                                  smooth=True, fill=bg,
+                                  outline="")
+            # 仅键盘导航显示淡虚线；选中胶囊始终只有 accent 填色这一种强调。
+            if self.topic_keyboard and focused is button and not active:
+                button.create_line(w / 2 - self.px(12), h - self.px(5),
+                                   w / 2 + self.px(12), h - self.px(5),
+                                   fill=self.p["text3"], width=1, dash=(2, 3))
+            button.create_text(w / 2, h / 2, text=name, fill=fg, font=(FONT, 10, "bold"))
+        if self.topic == TAROT_CUSTOM:
+            self.topic_input.pack(fill="x", pady=(self.px(8), 0))
+        else:
+            self.topic_input.pack_forget()
+        if self.state == "topic" and hasattr(self, "start_btn") and self.start_btn.winfo_exists():
+            self.button_feedback(self.start_btn, self.topic != TAROT_CUSTOM or bool(self.topic_var.get().strip()))
+
+    def start_daily(self):
+        if self.closed or self.state != "topic":
+            return
+        if self.topic == TAROT_CUSTOM and not self.topic_var.get().strip():
+            self.topic_entry.focus_set()
+            return
+        tarot_topic_set(self.app.conf, self.topic, self.topic_var.get())
+        self.cv.configure(takefocus=True)
+        self.start_shuffle()
+
+    def update_daily_prompt(self):
+        self.hint.configure(text=(f"{self.daily_day.month} 月 {self.daily_day.day} 日 · "
+                                  f"周{'一二三四五六日'[self.daily_day.weekday()]} · "
+                                  f"主题：{self.topic} · 今天已经抽过，明天再来。"))
+        self.prompt = tarot_daily_prompt(self.daily_day, *self.deck[self.selected[0]],
+                                         self.topic, self.topic_var.get())
+        self.update_prompt_text()
+        self.copy_btn.itemconfigure("text", text="复制")
+
+    def update_prompt_text(self):
+        text = self.prompt_text
+        text.configure(state="normal")
+        text.delete("1.0", "end")
+        text.insert("1.0", self.prompt)
+        text.configure(state="disabled")
+        # 实际显示行数包含窄屏和长问题的自动换行。
+        text.update_idletasks()
+        display_lines = (text.count("1.0", "end-1c", "displaylines") or (0,))[0] + 1
+        text.configure(height=max(len(self.prompt.splitlines()), display_lines))
 
     def question_screen(self):
         self.state = "question"
@@ -2800,6 +3031,8 @@ class TarotTable:
     def enter(self, _event=None):
         if self.state == "mode":
             self.choose_mode(("daily", "question")[self.mode_index])
+        elif self.state == "topic":
+            self.start_daily()
         elif self.state == "question":
             self.submit()
         elif self.state == "picking":
@@ -2898,6 +3131,9 @@ class TarotTable:
 
     def draw(self):
         self.cv.delete("all")
+        if self.mode == "daily" and self.state == "result":
+            self.draw_daily_result()
+            return
         cw = self.slots()
         if self.state == "picking":
             for i in range(78):
@@ -2925,6 +3161,18 @@ class TarotTable:
                 self.text(x, 268, "逆位" if rev else "正位", 9)
             elif self.state == "picking":
                 self.text(x, 244, "点击撤回", 9, "text3")
+
+    def draw_daily_result(self):
+        """今日结果横向排版，小牌与右侧牌名共用 150 高度（自定义多一行输入框，1080p 也不用滚动）。"""
+        key, rev = self.deck[self.selected[0]]
+        cw = min(72, self.w / 4)
+        x, y = max(cw / 2 + 18, self.w / 2 - 100), 75
+        tx = x + cw / 2 + 24
+        self.card(x, y, cw, key, rev)
+        self.text(tx, 36, "今日牌", 10, "text3", anchor="nw")
+        self.text(tx, 62, tarot_name(key)[0], 16, "text", True,
+                  anchor="nw", width=self.px(self.w - tx - 18))
+        self.text(tx, 104, "逆位" if rev else "正位", 10, anchor="nw")
 
     def hit(self, x, y):
         for i in reversed(range(78)):
@@ -3069,15 +3317,18 @@ class TarotTable:
         self.cancel_jobs()
         self.state = "result"
         self.draw()
-        self.cv.configure(height=self.px(300))
+        self.cv.configure(height=self.px(150 if self.mode == "daily" else 300))
         self.title.configure(text="你的今日牌，已展开" if self.mode == "daily" else "你的三张牌，已展开")
         self.hint.configure(text=(f"{self.daily_day.month} 月 {self.daily_day.day} 日 · "
                                   f"周{'一二三四五六日'[self.daily_day.weekday()]} · 今天已经抽过，明天再来。"
                                   if self.mode == "daily" else self.question))
         self.clear_controls()
+        if self.mode == "daily":
+            self.topic_controls()
         self.label(self.controls, "带着今日牌，去问 AI" if self.mode == "daily" else "带着问题与牌面，去问 AI",
                    11, "text", True).pack(anchor="w")
-        self.prompt = (tarot_daily_prompt(self.daily_day, *self.deck[self.selected[0]])
+        self.prompt = (tarot_daily_prompt(self.daily_day, *self.deck[self.selected[0]],
+                                           self.topic, self.topic_var.get())
                        if self.mode == "daily" else tarot_prompt(self.question, [self.deck[i] for i in self.selected]))
         area = tk.Frame(self.controls, bg=self.p["surface"], highlightthickness=1,
                         highlightbackground=self.p["border"])
@@ -3088,15 +3339,13 @@ class TarotTable:
                        selectbackground=self.p["accent"], selectforeground=self.p["on_accent"],
                        highlightthickness=0)
         text.pack(fill="x", expand=True)
-        text.insert("1.0", self.prompt)
-        text.configure(state="disabled")
-        # 先完成宽度布局，再数实际显示行；长问题和窄屏自动换行也能完整展开。
-        text.update_idletasks()
-        display_lines = (text.count("1.0", "end-1c", "displaylines") or (0,))[0] + 1
-        text.configure(height=max(len(self.prompt.splitlines()), display_lines))
+        self.prompt_text = text
+        self.update_prompt_text()
         self.copy_btn = self.button("复制", self.copy)
         self.copy_btn.pack(side="right")
         self.button("返回" if self.mode == "daily" else "再抽一次", self.reset, False).pack(side="right", padx=self.px(10))
+        if self.mode == "daily":
+            self.update_daily_prompt()
         self.viewport.yview_moveto(0)
         self.fit()
 
@@ -4334,6 +4583,16 @@ class Floater:
         """截图钩子：在模式选择页进入 daily（今日运势）或 question（提问）。"""
         if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
             self.tarot_table.choose_mode(mode)
+
+    def tarot_topic(self, topic, question=None):
+        """截图钩子：选主题页或今日结果页选择主题，可填写自定义问题。"""
+        if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
+            self.tarot_table.select_topic(topic, question)
+
+    def tarot_start(self):
+        """截图钩子：在选主题页点「开始洗牌」；自定义问题为空时不开始。"""
+        if getattr(self, "tarot_win", None) and self.tarot_win.winfo_exists():
+            self.tarot_table.start_daily()
 
     def tarot_pick(self, i):
         """截图钩子：选铺牌中的第 i 张（从 0 开始）；再点一次撤回。"""
