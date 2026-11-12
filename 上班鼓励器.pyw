@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.12.0"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.12.1"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
 
@@ -559,6 +559,12 @@ def jiao_throw():
 # ---------- 版本记录：发布新版时在最上面加一条（设置 → 其他 → 更新记录，右键菜单也能打开） ----------
 # (版本号, 日期, [这一版改了什么, ...])，新的在前
 CHANGELOG = [
+    ("1.12.1", "2026-11-12", [
+        "桌宠安静多了：动作切换从十几秒一次改成大约一分钟一次，一半时间乖乖坐着",
+        "动画放慢一半，两帧之间不再翻得像在抖",
+        "鼠标从旁边路过不再理你；在它旁边停一会儿它才转头看，也不会跟着鼠标来回甩头",
+        "伸爪拍鼠标少了很多，至少隔半分钟",
+    ]),
     ("1.12.0", "2026-11-12", [
         "Mac 版：悬浮窗和桌宠在所有桌面都能看到，切桌面、开全屏也不会消失",
         "Mac 版：主窗口改成带标题栏的普通窗口，点红色按钮就能退出",
@@ -1333,7 +1339,7 @@ PET_CAT_HEIGHT = 46                           # 自动处理时，平时坐姿�
 PET_STORE = 256                               # 动画帧实际存储分辨率，显示时再缩到 PET_SIZE×大小；越大越清晰、导入越慢（想快改回 64）
 PET_SCALE = PET_STORE // PET_SIZE             # 存储相对逻辑画布的倍数
 PET_KEY = "#ff00fe"                           # 读图时用这个颜色标记透明像素
-PET_FPS_MS = 250
+PET_FPS_MS = 500                              # 每帧至少这么久（素材 manifest 写得更慢就按素材的）
 
 # ---------- 桌宠：给 AI 画素材用的提示词（设置 → 宠物 → 复制提示词） ----------
 # (批次标题, [(文件名, 画什么), ...])；和 PET_STATES 一一对应，改动作时两边一起改
@@ -2035,7 +2041,7 @@ class Pet:
         watch = self.watch_cursor(now)
         if watch:
             return watch
-        if now >= self.ambient_until:  # 每 12–20 秒换一个“平常状态”：天气 / 上班 / 平时 / 小动作
+        if now >= self.ambient_until:  # 每 45–90 秒换一个“平常状态”：天气 / 上班 / 平时 / 小动作
             wx = LIVE.get("wx") or {}
             kind, t = wx_kind(wx.get("now_c", "")), wx.get("now_t")
             weather = "snow" if kind == "snow" else "rain" if kind in ("rain", "mix", "thunder") \
@@ -2045,15 +2051,16 @@ class Pet:
                 weather = "scared"                 # 打雷：有时吓一跳
             loops = [x for x in PET_EXTRA_LOOP if x in self.frames
                      and (x != "rub" or self.data["love"] >= 20)]  # 亲密度 Lv.3 起才撒娇
-            pool = ["idle", "idle"] + (["work", "work"] if self.st == "work" else []) + \
-                   ([weather] * 3 if weather else []) + loops + \
-                   (["excited"] * 4 if getattr(self, "near_off", False) else [])  # 快下班了
-            self.ambient, self.ambient_until = random.choice(pool), now + random.uniform(12, 20)
+            others = (["work", "work"] if self.st == "work" else []) + \
+                     ([weather] * 3 if weather else []) + loops + \
+                     (["excited"] * 4 if getattr(self, "near_off", False) else [])  # 快下班了
+            pool = others + ["idle"] * max(2, len(others))  # 大约一半时间安静坐着
+            self.ambient, self.ambient_until = random.choice(pool), now + random.uniform(45, 90)
             if self.ambient == "cold":
                 self.jiggle("shake")
             # 有时先插一个“做一次”的小动作（舔爪、打哈欠、伸懒腰、挠耳朵），做完回到平常状态
             once = [x for x in PET_EXTRA_ONCE if x in self.frames]
-            if once and random.random() < .45:
+            if once and random.random() < .2:
                 x = random.choices(once, weights=[PET_ONCE_WEIGHT.get(o, 1) for o in once])[0]
                 secs = len(self.frames[x]) * self.frame_ms() / 1000 * 2
                 self.play(x, secs)
@@ -2062,9 +2069,13 @@ class Pet:
         return self.ambient
 
     def watch_cursor(self, now):
-        """鼠标靠近：转头盯着鼠标那边；很近时偶尔伸爪拍过去。没有这组素材就不做。"""
+        """鼠标在旁边停 1 秒：转头盯着鼠标那边，转过去至少保持 2 秒（不来回甩头）；
+        很近时偶尔伸爪拍过去（至少隔 30 秒）。没有这组素材就不做。"""
         if not ("watchl" in self.frames or "watchr" in self.frames) or self.win is None:
             return None
+        held, since = getattr(self, "watch_side", None), getattr(self, "watch_since", 0)
+        if held and now - since < 2:
+            return "watch" + held
         try:
             mx, my = self.app.root.winfo_pointerxy()
         except tk.TclError:
@@ -2075,17 +2086,25 @@ class Pet:
         dx, dy = mx - cx, my - cy
         dist = (dx * dx + dy * dy) ** .5
         inside = abs(dx) < 22 * z and abs(dy) < 26 * z  # 鼠标在猫身上：交给摸摸 / 点击处理
-        if inside or dist > 90 * z or abs(dx) < 10 * z:
+        if inside or dist > 60 * z or abs(dx) < 10 * z:
+            self.near_since, self.watch_side = None, None
+            return None
+        if getattr(self, "near_since", None) is None:
+            self.near_since = now
+        if now - self.near_since < 1:  # 只是路过，不理
             return None
         side = "l" if dx < 0 else "r"
-        if dist < 45 * z and now - getattr(self, "swat_at", 0) > 6 and random.random() < .15:
+        if side != held:
+            self.watch_side, self.watch_since = side, now
+        if dist < 40 * z and now - getattr(self, "swat_at", 0) > 30 and random.random() < .03:
             self.swat_at = now
             self.play("swat" + side, 1, "watch" + side, 1)
             return "swat" + side
         return "watch" + side
 
     def frame_ms(self):
-        return int(self.manifest.get("frame_duration_ms", PET_FPS_MS))
+        # 旧素材导入时 manifest 里写的是 250，取较慢的那个，免得两帧翻得太快像在抖
+        return max(PET_FPS_MS, int(self.manifest.get("frame_duration_ms", PET_FPS_MS)))
 
     def play(self, *seq):
         """插播一串动作：play("eat", 3, "happy", 2)。"""
