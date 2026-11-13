@@ -16,9 +16,11 @@ import tkinter as tk
 from tkinter import messagebox
 
 APP = "上班鼓励器"
-VERSION = "1.12.1"  # 发布新版时改这里，同事那边自动更新
+VERSION = "1.13.0"  # 发布新版时改这里，同事那边自动更新
 IS_MAC = sys.platform == "darwin"
 HOME = os.path.expanduser("~")
+# 窗口 / 任务栏图标：猫的 idle_1（已去绿幕，95×95 PNG）。嵌在代码里，因为自动更新只下载这一个文件
+APP_ICON = "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"
 
 if IS_MAC:
     CONF_DIR = os.path.join(HOME, "Library", "Application Support", APP)
@@ -318,13 +320,14 @@ TAROT_CARDS = [(f"{i:02d}", zh, en) for i, (zh, en) in enumerate(TAROT_MAJOR)] +
     for k, szh, sen in TAROT_SUITS for i, (rzh, ren) in enumerate(TAROT_RANKS)]
 TAROT_BACK = "back"
 TAROT_POSITIONS = ["过去", "现在", "未来"]
-TAROT_DIR = os.path.join(CONF_DIR, "tarot")
+# v2：换成高清、统一裁边的牌面；换目录名让已下载旧图的人自动重新下载
+TAROT_DIR = os.path.join(CONF_DIR, "tarot2")
 TAROT_DEV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tarot")
 TAROT_DL = {"busy": False, "done": 0, "total": 0, "error": ""}  # 后台下载进度，界面线程只读
 
 
 def tarot_path(key):
-    """牌面图片路径（PNG，150×260）；key 是 TAROT_CARDS 里的图片名或 TAROT_BACK。"""
+    """牌面图片路径（PNG，270×468，比例同 150:260）；key 是 TAROT_CARDS 里的图片名或 TAROT_BACK。"""
     dev = os.path.join(TAROT_DEV_DIR, key + ".png")
     return dev if os.path.isfile(dev) else os.path.join(TAROT_DIR, key + ".png")
 
@@ -339,7 +342,7 @@ def tarot_ready():
 
 
 def tarot_download():
-    """后台线程：补齐缺的牌面（约 2 MB）。由 tarot_start_download 启动，进度看 TAROT_DL。"""
+    """后台线程：补齐缺的牌面（约 8 MB）。由 tarot_start_download 启动，进度看 TAROT_DL。"""
     import urllib.request
     miss = tarot_missing()
     TAROT_DL.update(done=0, total=len(miss), error="")
@@ -559,6 +562,12 @@ def jiao_throw():
 # ---------- 版本记录：发布新版时在最上面加一条（设置 → 其他 → 更新记录，右键菜单也能打开） ----------
 # (版本号, 日期, [这一版改了什么, ...])，新的在前
 CHANGELOG = [
+    ("1.13.0", "2026-11-12", [
+        "塔罗牌换成高清牌面，每张牌四边留白一样宽，不再歪；牌和框都改成圆角（第一次打开会重新下载牌面，约 7 MB）",
+        "选牌手感更好：鼠标移上去牌会弹起来、带阴影，选中的牌会飞到牌位上，撤回会飞回去",
+        "程序图标换成小猫",
+        "Mac 版：桌宠窗口有时不显示的问题修好了；桌宠素材读不出来时会写进运行日志",
+    ]),
     ("1.12.1", "2026-11-12", [
         "桌宠安静多了：动作切换从十几秒一次改成大约一分钟一次，一半时间乖乖坐着",
         "动画放慢一半，两帧之间不再翻得像在抖",
@@ -1857,15 +1866,27 @@ class Pet:
             for fx, n in self.manifest.get("effects", {}).items():
                 self.effects[fx] = self._disp(n, PET_FX * z)
         except Exception:
+            import traceback
+            print("桌宠素材读取失败:", file=sys.stderr)
+            traceback.print_exc()           # Mac 上写进 运行日志.log，方便排查
             self.frames = {}
             return
         if "idle" not in self.frames:
+            print("桌宠素材里没有 idle 动作，不显示", file=sys.stderr)
             return
         s = PET_SIZE * self.zoom()
         self.win = tk.Toplevel(self.app.root)
         self.win.title(APP + "桌宠")
         enable_desktop_follow(self.win)
-        self.win.overrideredirect(True)
+        if IS_MAC:
+            # Mac 上 overrideredirect 常出现窗口不显示，改用原生无边框样式（须在窗口显示前设置）
+            try:
+                self.win.tk.call("::tk::unsupported::MacWindowStyle", "style",
+                                 self.win._w, "plain", "none")
+            except tk.TclError:
+                self.win.overrideredirect(True)
+        else:
+            self.win.overrideredirect(True)
         self.win.attributes("-topmost", True)
         bg = PET_KEY
         if IS_MAC:
@@ -2682,7 +2703,8 @@ class TarotTable:
     def image(self, key, width, rev=False, height=None):
         """缓存图片。整数缩小用 Tk；任意尺寸用标准库生成 PPM，无第三方依赖。"""
         w = self.px(width)
-        h = self.px(height if height is not None else width * 260 / 150)
+        # 高度由取整后的宽度算：动画里宽度带小数，同一宽度不会因小数不同生成多张
+        h = self.px(height) if height is not None else max(1, round(w * 260 / 150))
         cache = (key, rev, w, h)
         if cache in self.images:
             return self.images[cache]
@@ -2696,16 +2718,43 @@ class TarotTable:
             rgb = [bytes.fromhex("".join(c[1:] for c in src.tk.splitlist(row))) for row in rows]
             self.pixels[source_key] = (src.width(), src.height(), rgb)
         sw, sh, rows = self.pixels[source_key]
-        xs = [min(sw - 1, x * sw // w) * 3 for x in range(w)]
-        scaled = {}
-        for sy in set(y * sh // h for y in range(h)):
-            row = rows[sy]
-            scaled[sy] = b"".join(row[x:x + 3] for x in xs)
-        data = f"P6\n{w} {h}\n255\n".encode("ascii") + b"".join(
-            scaled[y * sh // h] for y in range(h))
+        # 抗锯齿：每个输出像素在源图里取 k×k 个点求平均（缩得越多 k 越大），只取一个点会有颗粒感
+        k = 4 if sw > 3 * w else 2 if sw > 1.5 * w else 1
+        xsets = [[min(sw - 1, (2 * (k * x + j) + 1) * sw // (2 * k * w)) * 3 for x in range(w)]
+                 for j in range(k)]
+
+        def mean(parts):
+            # 等长字节串逐字节求平均：转成大整数一次算完整行，(a&b)+((a^b)>>1) 不会跨字节进位
+            while len(parts) > 1:
+                n = len(parts[0])
+                mask = int.from_bytes(b"\x7f" * n, "big")
+                nxt = []
+                for a, b in zip(parts[::2], parts[1::2]):
+                    a, b = int.from_bytes(a, "big"), int.from_bytes(b, "big")
+                    nxt.append(((a & b) + (((a ^ b) >> 1) & mask)).to_bytes(n, "big"))
+                parts = nxt
+            return parts[0]
+        out = []
+        for y in range(h):
+            srows = [rows[min(sh - 1, (2 * (k * y + j) + 1) * sh // (2 * k * h))] for j in range(k)]
+            out.append(mean([b"".join(r[x:x + 3] for x in xs) for r in srows for xs in xsets]))
+        data = f"P6\n{w} {h}\n255\n".encode("ascii") + b"".join(out)
         img = tk.PhotoImage(master=self.win, data=data, format="PPM")
+        # 圆角：四个角外侧的像素设成透明（PPM 没有透明通道，只能逐点设）
+        r = min(w // 2, round(h * .045))
+        for dy in range(r):
+            for dx in range(r):
+                if (r - dx - .5) ** 2 + (r - dy - .5) ** 2 > r * r:
+                    for px, py in ((dx, dy), (w - 1 - dx, dy), (dx, h - 1 - dy), (w - 1 - dx, h - 1 - dy)):
+                        img.tk.call(img, "transparency", "set", px, py, 1)
         self.images[cache] = img
         return img
+
+    def round_rect(self, x0, y0, x1, y1, r, **kw):
+        """圆角矩形（逻辑坐标），做法同 PillButton：平滑多边形。"""
+        pts = [x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r, x1, y1 - r, x1, y1,
+               x1 - r, y1, x0 + r, y1, x0, y1, x0, y1 - r, x0, y0 + r, x0, y0]
+        return self.cv.create_polygon([v * self.s for v in pts], smooth=True, **kw)
 
     def card(self, x, y, width, key=TAROT_BACK, rev=False, tags=(), height=None):
         img = self.image(key, width, rev, height)
@@ -2801,11 +2850,10 @@ class TarotTable:
                 ("问一个问题", "过去 / 现在 / 未来\n写下心里的问题，亲手选出三张牌。"))):
             y = 24 + i * 168
             active = i == self.mode_index or i == self.mode_hover
-            self.cv.create_rectangle(24 * self.s, y * self.s,
-                                     (self.w - 24) * self.s, (y + 152) * self.s,
-                                     fill=self.p["input" if i == self.mode_hover else "surface"],
-                                     outline=self.p["accent" if active else "border"],
-                                     width=self.px(2 if active else 1))
+            self.round_rect(24, y, self.w - 24, y + 152, 12,
+                            fill=self.p["input" if i == self.mode_hover else "surface"],
+                            outline=self.p["accent" if active else "border"],
+                            width=self.px(2 if active else 1))
             if i == 0:
                 self.card(92, y + 76, 64, today[0] if today else TAROT_BACK,
                           today[1] if today else False)
@@ -3135,9 +3183,9 @@ class TarotTable:
         for j, pos in enumerate(self.positions):
             x, y = self.slot_xy(j)
             self.text(x, 22, f"{j + 1:02d}  {pos}", 10, "text2", True)
-            self.cv.create_rectangle((x - cw / 2 - 4) * self.s, (y - cw * 260 / 300 - 4) * self.s,
-                                     (x + cw / 2 + 4) * self.s, (y + cw * 260 / 300 + 4) * self.s,
-                                     outline=self.p["border"], dash=(3, 5), tags=("slot",))
+            self.round_rect(x - cw / 2 - 4, y - cw * 260 / 300 - 4, x + cw / 2 + 4,
+                            y + cw * 260 / 300 + 4, cw * .08 + 4, fill="",
+                            outline=self.p["border"], dash=(3, 5), tags=("slot",))
             if j >= len(self.selected):
                 self.text(x, y, "待选", 10, "text3")
         return cw
@@ -3155,8 +3203,43 @@ class TarotTable:
             self.state = "picking"
             self.title.configure(text="凭直觉，选出你的一张今日牌" if self.mode == "daily" else "凭直觉，选出你的三张牌")
             self.pick_controls()
-            self.draw()
+            # 画面位置和逻辑位置分开（同小丑牌）：命中按 spread_xy，画面每帧用弹簧追过去。
+            self.vis = {i: [*self.spread_xy(i), 0, 0, 0, 0, 0] for i in range(78)}
+            self.juice = {}
+            # 每种尺寸的牌背第一次要现算 10~20ms；趁空闲每帧预先算一张，飞牌时就不掉帧
+            self.warm = list(range(self.px(min(48, self.w * .09)), self.px(min(108, self.w / 4 - 22) * 1.15) + 2))
+            self.anim_frame()
             self.cv.focus_set()
+
+    def anim_target(self, i):
+        if i in self.selected:
+            return (*self.slot_xy(self.selected.index(i)), min(108, self.w / 4 - 22), 0)
+        x, y, width = self.spread_xy(i)
+        return (x, y - 14, width * 1.15, 1) if i == self.hover else (x, y, width, 0)
+
+    def anim_frame(self):
+        if self.state != "picking":
+            return
+        for i, v in self.vis.items():
+            for k, t in enumerate(self.anim_target(i)):
+                v[k + 4] = v[k + 4] * .6 + (t - v[k]) * .18  # 欠阻尼弹簧：约 0.28 秒到位，过冲 15%
+                v[k] += v[k + 4]
+        self.draw()
+        if self.warm:
+            self.image(TAROT_BACK, self.warm.pop() / self.s)
+        self.later(16, self.anim_frame)
+
+    def juice_up(self, i, amount):
+        import time
+        self.juice[i] = (time.monotonic(), amount)
+
+    def juice_scale(self, i):
+        """小丑牌的 juice_up：快速正弦乘三次方衰减，0.4 秒内弹完。"""
+        import math
+        import time
+        start, amount = self.juice.get(i, (0, 0))
+        t = time.monotonic() - start
+        return 1 + amount * math.sin(50.8 * t) * (1 - t / .4) ** 3 if t < .4 else 1
 
     def pick_controls(self):
         self.clear_controls()
@@ -3172,17 +3255,23 @@ class TarotTable:
             return
         cw = self.slots()
         if self.state == "picking":
-            for i in range(78):
-                if i not in self.selected:
-                    x, y, width = self.spread_xy(i)
-                    self.card(x, y, width)
-            # 高亮不改变命中顺序：仍按原来露出的窄条命中，避免悬停时来回跳牌。
-            if self.hover is not None and self.hover not in self.selected:
-                x, y, width = self.spread_xy(self.hover)
-                self.cv.create_rectangle((x - width / 2 - 3) * self.s, (y - 12 - width * 260 / 300 - 3) * self.s,
-                                         (x + width / 2 + 3) * self.s, (y - 12 + width * 260 / 300 + 3) * self.s,
-                                         fill=self.p["surface"], outline=self.p["accent"], width=self.px(3))
-                self.card(x, y - 12, width)
+            shade = "#%02x%02x%02x" % tuple(int(int(self.p["surface"][k:k + 2], 16) * .8) for k in (1, 3, 5))
+            # 高亮不改变命中顺序：仍按原来露出的窄条命中，避免悬停时来回跳牌；只是画在最上层。
+            hover = [self.hover] if self.hover is not None and self.hover not in self.selected else []
+            rest = [i for i in range(78) if i not in self.selected and i not in hover]
+            for i in rest + hover + self.selected:
+                x, y, width, lift = self.vis[i][:4]
+                width *= self.juice_scale(i)
+                half = width * 260 / 300
+                if lift > .02:  # 抬起越高，阴影越往下错开
+                    d = 6 * lift
+                    self.round_rect(x - width / 2 + d / 2, y - half + d, x + width / 2 + d / 2,
+                                    y + half + d, half * .09, fill=shade, outline="")
+                if i in hover:
+                    self.round_rect(x - width / 2 - 3, y - half - 3, x + width / 2 + 3, y + half + 3,
+                                    half * .09 + 3, fill=self.p["surface"], outline=self.p["accent"],
+                                    width=self.px(3))
+                self.card(x, y, width)
             count = len(self.positions)
             self.hint.configure(text=(f"已选 {len(self.selected)}/{count} · 下一张：{self.positions[len(self.selected)]}"
                                       if len(self.selected) < count else "牌已就位。准备好后，点「确定」翻牌。"))
@@ -3191,7 +3280,8 @@ class TarotTable:
             x, y = self.slot_xy(slot)
             key, rev = self.deck[i]
             face = slot in self.revealed
-            self.card(x, y, cw, key if face else TAROT_BACK, rev if face else False)
+            if self.state != "picking":  # 选牌时这张由上面按弹簧位置画
+                self.card(x, y, cw, key if face else TAROT_BACK, rev if face else False)
             if face:
                 self.text(x, 244, tarot_name(key)[0], 11, "text", True)
                 self.text(x, 268, "逆位" if rev else "正位", 9)
@@ -3230,6 +3320,8 @@ class TarotTable:
             i = None
         if self.state == "picking" and self.hover != i:
             self.hover = i
+            if i is not None:
+                self.juice_up(i, .06)
             self.cv.configure(cursor="hand2" if i is not None else "arrow")
             self.draw()
 
@@ -3294,6 +3386,9 @@ class TarotTable:
             self.selected.remove(i)
         elif len(self.selected) < len(self.positions):
             self.selected.append(i)
+        else:
+            return
+        self.juice_up(i, .12)
         self.hover = None
         self.draw()
 
@@ -4002,6 +4097,8 @@ class Floater:
         self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", self.conf["alpha"])
         pick_fonts()
+        self.icon = tk.PhotoImage(master=self.root, data=APP_ICON)
+        self.root.iconphoto(True, self.icon)  # True：之后开的设置、塔罗等窗口也用这个图标
 
         self.cheer = ""
         self.cheer_state = None
